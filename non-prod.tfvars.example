@@ -1,0 +1,6 @@
+namespace               = "titan"
+env                     = "non-prod"
+ssh_allowed_cidr        = "YOUR_IP/32"   # e.g. "1.2.3.4/32" — run: curl ifconfig.me
+head_node_instance_type = "t3.micro"
+compute_instance_type   = "t3.micro"
+max_compute_nodes       = 2

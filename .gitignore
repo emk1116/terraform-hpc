@@ -1,0 +1,29 @@
+# Terraform state — contains secrets, never commit
+*.tfstate
+*.tfstate.backup
+
+# Terraform working directory, downloaded providers, and lock file
+.terraform/
+.terraform.lock.hcl
+
+# Plan output files
+*.tfplan
+tfplan
+plan.txt
+
+# Variable files — may contain personal IPs, secrets, account-specific config
+*.tfvars
+*.auto.tfvars
+# Committed example templates are allowed
+!*.tfvars.example
+
+# Crash logs
+crash.log
+crash.*.log
+
+# SSH keys
+*.pem
+*.ppk
+*.key
+!*.pub
+.terraform.tfstate.lock.info
