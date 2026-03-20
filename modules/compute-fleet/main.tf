@@ -33,6 +33,7 @@ resource "aws_launch_template" "compute" {
     max_compute_nodes = var.max_compute_nodes
     fsx_dns_name      = var.fsx_dns_name
     fsx_mount_name    = var.fsx_mount_name
+    bucket_name       = var.bucket_name
   }))
 
   metadata_options {

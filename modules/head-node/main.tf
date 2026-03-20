@@ -37,6 +37,7 @@ resource "aws_instance" "head_node" {
     slurm_db_password    = var.slurm_db_password
     fsx_dns_name         = var.fsx_dns_name
     fsx_mount_name       = var.fsx_mount_name
+    bucket_name          = var.bucket_name
   }))
 
   metadata_options {

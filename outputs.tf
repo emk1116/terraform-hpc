@@ -18,6 +18,19 @@ output "compute_asg_name" {
   description = "Name of the compute Auto Scaling Group"
 }
 
+output "s3_bucket_name" {
+  value       = module.s3.bucket_name
+  description = "S3 bucket for pipeline input/output"
+}
+
+output "s3_pipeline_paths" {
+  value = {
+    input   = "s3://${module.s3.bucket_name}/input/"
+    results = "s3://${module.s3.bucket_name}/results/"
+  }
+  description = "S3 paths for pipeline data flow"
+}
+
 output "fsx_dns_name" {
   value       = module.fsx.dns_name
   description = "FSx for Lustre DNS name"
@@ -53,5 +66,10 @@ output "usage_instructions" {
 
     5. Submit FSx test job (as user1 or user2):
        sudo -u user1 sbatch /home/ec2-user/fsx_test_job.sh
+
+    6. S3 pipeline — upload input, submit, verify results:
+       aws s3 cp test.txt s3://${module.s3.bucket_name}/input/
+       sudo -u user1 sbatch /home/ec2-user/s3_pipeline_job.sh
+       aws s3 ls s3://${module.s3.bucket_name}/results/
   EOT
 }

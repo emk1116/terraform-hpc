@@ -12,6 +12,7 @@ CLUSTER_NAME="${namespace}-${env}"
 LT_NAME="${launch_template_name}"
 MAX_NODES="${max_compute_nodes}"
 LAST_IDX=$(( ${max_compute_nodes} - 1 ))
+HPC_BUCKET="${bucket_name}"
 
 echo "Cluster: $CLUSTER_NAME | Region: $REGION | Max nodes: $MAX_NODES"
 
@@ -164,6 +165,16 @@ LT_NAME=$LT_NAME
 ENVFILE
 
 chmod 644 /etc/slurm/cluster.env
+
+# ── Pipeline environment (available to all sessions + batch jobs) ─────────────
+grep -q "HPC_BUCKET" /etc/environment || echo "HPC_BUCKET=$HPC_BUCKET" >> /etc/environment
+
+cat > /etc/profile.d/hpc-pipeline.sh << PIPELINEENV
+export HPC_BUCKET="$HPC_BUCKET"
+export HPC_S3_INPUT="s3://$HPC_BUCKET/input"
+export HPC_S3_RESULTS="s3://$HPC_BUCKET/results"
+PIPELINEENV
+chmod 644 /etc/profile.d/hpc-pipeline.sh
 
 # ── resume.sh ─────────────────────────────────────────────────────────────────
 cat > /etc/slurm/resume.sh << 'RESSCRIPT'

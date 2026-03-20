@@ -11,6 +11,7 @@ REGION="${aws_region}"
 CLUSTER_NAME="${namespace}-${env}"
 MAX_NODES="${max_compute_nodes}"
 LAST_IDX=$(( ${max_compute_nodes} - 1 ))
+HPC_BUCKET="${bucket_name}"
 
 # ── IMDSv2 metadata ───────────────────────────────────────────────────────────
 TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
@@ -107,6 +108,16 @@ chmod 644 /etc/slurm/slurm.conf
 
 # Start munge (required for Slurm auth — no slurmctld/slurmd on login node)
 systemctl enable munge && systemctl start munge
+
+# ── Pipeline environment ──────────────────────────────────────────────────────
+grep -q "HPC_BUCKET" /etc/environment || echo "HPC_BUCKET=$HPC_BUCKET" >> /etc/environment
+
+cat > /etc/profile.d/hpc-pipeline.sh << PIPELINEENV
+export HPC_BUCKET="$HPC_BUCKET"
+export HPC_S3_INPUT="s3://$HPC_BUCKET/input"
+export HPC_S3_RESULTS="s3://$HPC_BUCKET/results"
+PIPELINEENV
+chmod 644 /etc/profile.d/hpc-pipeline.sh
 
 # ── FSx for Lustre mount ──────────────────────────────────────────────────────
 FSX_DNS="${fsx_dns_name}"

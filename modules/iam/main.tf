@@ -65,6 +65,18 @@ resource "aws_iam_role_policy" "head_node" {
         Effect   = "Allow"
         Action   = ["iam:PassRole"]
         Resource = aws_iam_role.compute_node.arn
+      },
+      {
+        Sid    = "S3DataPipeline"
+        Effect = "Allow"
+        Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+        Resource = "${var.s3_bucket_arn}/*"
+      },
+      {
+        Sid      = "S3ListBucket"
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
+        Resource = var.s3_bucket_arn
       }
     ]
   })
@@ -111,6 +123,18 @@ resource "aws_iam_role_policy" "compute_node" {
         Effect   = "Allow"
         Action   = ["ec2:DescribeTags"]
         Resource = "*"
+      },
+      {
+        Sid    = "S3DataPipeline"
+        Effect = "Allow"
+        Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+        Resource = "${var.s3_bucket_arn}/*"
+      },
+      {
+        Sid      = "S3ListBucket"
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
+        Resource = var.s3_bucket_arn
       }
     ]
   })
@@ -145,12 +169,26 @@ resource "aws_iam_role_policy" "login_node" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Sid    = "SSMReadOnly"
-      Effect = "Allow"
-      Action = ["ssm:GetParameter", "ssm:GetParameters"]
-      Resource = "arn:aws:ssm:*:*:parameter/hpc/${var.namespace}/${var.env}/*"
-    }]
+    Statement = [
+      {
+        Sid    = "SSMReadOnly"
+        Effect = "Allow"
+        Action = ["ssm:GetParameter", "ssm:GetParameters"]
+        Resource = "arn:aws:ssm:*:*:parameter/hpc/${var.namespace}/${var.env}/*"
+      },
+      {
+        Sid    = "S3DataPipeline"
+        Effect = "Allow"
+        Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+        Resource = "${var.s3_bucket_arn}/*"
+      },
+      {
+        Sid      = "S3ListBucket"
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
+        Resource = var.s3_bucket_arn
+      }
+    ]
   })
 }
 

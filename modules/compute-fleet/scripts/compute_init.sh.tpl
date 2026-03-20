@@ -11,6 +11,7 @@ REGION="${aws_region}"
 CLUSTER_NAME="${namespace}-${env}"
 MAX_NODES="${max_compute_nodes}"
 LAST_IDX=$(( ${max_compute_nodes} - 1 ))
+HPC_BUCKET="${bucket_name}"
 
 # ── IMDSv1 metadata (compute nodes use optional IMDSv2) ───────────────────────
 INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
@@ -135,6 +136,16 @@ PartitionName=main Nodes=$CLUSTER_NAME-compute-[0-$LAST_IDX] Default=YES MaxTime
 SLURMCONF
 
 chown slurm:slurm /etc/slurm/slurm.conf
+
+# ── Pipeline environment ──────────────────────────────────────────────────────
+grep -q "HPC_BUCKET" /etc/environment || echo "HPC_BUCKET=$HPC_BUCKET" >> /etc/environment
+
+cat > /etc/profile.d/hpc-pipeline.sh << PIPELINEENV
+export HPC_BUCKET="$HPC_BUCKET"
+export HPC_S3_INPUT="s3://$HPC_BUCKET/input"
+export HPC_S3_RESULTS="s3://$HPC_BUCKET/results"
+PIPELINEENV
+chmod 644 /etc/profile.d/hpc-pipeline.sh
 
 # ── FSx for Lustre mount ──────────────────────────────────────────────────────
 FSX_DNS="${fsx_dns_name}"

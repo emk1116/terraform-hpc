@@ -14,3 +14,4 @@ variable "slurm_db_password" {
 }
 variable "fsx_dns_name" {}
 variable "fsx_mount_name" {}
+variable "bucket_name" {}

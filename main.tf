@@ -20,8 +20,8 @@ module "network" {
   ssh_allowed_cidr = var.ssh_allowed_cidr
 }
 
-module "iam" {
-  source    = "./modules/iam"
+module "s3" {
+  source    = "./modules/s3"
   namespace = var.namespace
   env       = var.env
 }
@@ -34,23 +34,31 @@ module "fsx" {
   security_group_id = module.network.security_group_id
 }
 
+module "iam" {
+  source        = "./modules/iam"
+  namespace     = var.namespace
+  env           = var.env
+  s3_bucket_arn = module.s3.bucket_arn
+}
+
 module "head_node" {
   source = "./modules/head-node"
 
-  namespace            = var.namespace
-  env                  = var.env
-  instance_type        = var.head_node_instance_type
-  subnet_id            = module.network.subnet_id
-  security_group_id    = module.network.security_group_id
-  iam_instance_profile = module.iam.head_node_instance_profile
-  key_name             = aws_key_pair.hpc_key.key_name
-  aws_region           = var.aws_region
+  namespace             = var.namespace
+  env                   = var.env
+  instance_type         = var.head_node_instance_type
+  subnet_id             = module.network.subnet_id
+  security_group_id     = module.network.security_group_id
+  iam_instance_profile  = module.iam.head_node_instance_profile
+  key_name              = aws_key_pair.hpc_key.key_name
+  aws_region            = var.aws_region
   compute_instance_type = var.compute_instance_type
-  max_compute_nodes    = var.max_compute_nodes
-  launch_template_name = "${var.namespace}-${var.env}-compute-lt"
-  slurm_db_password    = random_password.slurm_db.result
-  fsx_dns_name         = module.fsx.dns_name
-  fsx_mount_name       = module.fsx.mount_name
+  max_compute_nodes     = var.max_compute_nodes
+  launch_template_name  = "${var.namespace}-${var.env}-compute-lt"
+  slurm_db_password     = random_password.slurm_db.result
+  fsx_dns_name          = module.fsx.dns_name
+  fsx_mount_name        = module.fsx.mount_name
+  bucket_name           = module.s3.bucket_name
 }
 
 module "login_node" {
@@ -68,6 +76,7 @@ module "login_node" {
   head_node_private_ip = module.head_node.private_ip
   fsx_dns_name         = module.fsx.dns_name
   fsx_mount_name       = module.fsx.mount_name
+  bucket_name          = module.s3.bucket_name
 }
 
 module "compute_fleet" {
@@ -84,6 +93,7 @@ module "compute_fleet" {
   max_compute_nodes    = var.max_compute_nodes
   fsx_dns_name         = module.fsx.dns_name
   fsx_mount_name       = module.fsx.mount_name
+  bucket_name          = module.s3.bucket_name
 }
 
 # Terminates Slurm-launched compute nodes (not in Terraform state) before
