@@ -27,7 +27,7 @@ echo "Private IP: $PRIVATE_IP | Hostname: $HOSTNAME"
 # ── Install packages ──────────────────────────────────────────────────────────
 yum update -y
 amazon-linux-extras install epel -y
-amazon-linux-extras install lustre7 -y
+amazon-linux-extras install lustre2.10 -y
 yum install -y \
   slurm slurm-slurmctld slurm-slurmdbd \
   munge munge-devel \
@@ -138,7 +138,7 @@ SlurmdDebug=info
 # Autoscaling (power save)
 ResumeProgram=/etc/slurm/resume.sh
 SuspendProgram=/etc/slurm/suspend.sh
-ResumeTimeout=300
+ResumeTimeout=600
 SuspendTime=120
 ResumeRate=0
 SuspendRate=0
@@ -177,7 +177,7 @@ for NODE in $NODES; do
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Launching: $NODE"
   aws ec2 run-instances \
     --region "$REGION" \
-    --launch-template "LaunchTemplateName=$LT_NAME" \
+    --launch-template "LaunchTemplateName=$LT_NAME,Version=\$Latest" \
     --count 1 \
     --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$NODE},{Key=SlurmNodeName,Value=$NODE},{Key=Namespace,Value=$NAMESPACE},{Key=Environment,Value=$ENV},{Key=Project,Value=hpc},{Key=ManagedBy,Value=slurm}]"
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Launched: $NODE"

@@ -23,7 +23,7 @@ echo "Login node IP: $PRIVATE_IP"
 # ── Install packages ──────────────────────────────────────────────────────────
 yum update -y
 amazon-linux-extras install epel -y
-amazon-linux-extras install lustre7 -y
+amazon-linux-extras install lustre2.10 -y
 yum install -y slurm munge munge-devel awscli libcgroup libcgroup-tools
 
 # Create slurm user

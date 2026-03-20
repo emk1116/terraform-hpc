@@ -47,7 +47,7 @@ hostnamectl set-hostname "$NODE_NAME"
 # ── Install packages ──────────────────────────────────────────────────────────
 yum update -y
 amazon-linux-extras install epel -y
-amazon-linux-extras install lustre7 -y
+amazon-linux-extras install lustre2.10 -y
 yum install -y slurm slurm-slurmd munge munge-devel awscli
 
 # Create slurm user (AL2 EPEL RPM does not always create it automatically)
