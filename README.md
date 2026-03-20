@@ -204,3 +204,7 @@ Four independent layers enforce no-compute-on-login-node policy:
 |---|---|
 | `jobs/job.sh` | Basic hello world array job (output to `/tmp`) |
 | `jobs/fsx_test_job.sh` | FSx array job — writes to `/fsx/work/$USER/` |
+
+## License
+
+MIT — see [LICENSE](LICENSE).
