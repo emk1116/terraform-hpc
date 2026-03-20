@@ -9,3 +9,7 @@ output "security_group_id" {
 output "vpc_id" {
   value = aws_vpc.hpc_vpc.id
 }
+
+output "login_sg_id" {
+  value = aws_security_group.login_sg.id
+}

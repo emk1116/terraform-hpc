@@ -43,6 +43,21 @@ module "head_node" {
   slurm_db_password    = random_password.slurm_db.result
 }
 
+module "login_node" {
+  source = "./modules/login-node"
+
+  namespace            = var.namespace
+  env                  = var.env
+  instance_type        = "t3.small"
+  subnet_id            = module.network.subnet_id
+  security_group_id    = module.network.login_sg_id
+  iam_instance_profile = module.iam.login_node_instance_profile
+  key_name             = aws_key_pair.hpc_key.key_name
+  aws_region           = var.aws_region
+  max_compute_nodes    = var.max_compute_nodes
+  head_node_private_ip = module.head_node.private_ip
+}
+
 module "compute_fleet" {
   source = "./modules/compute-fleet"
 
@@ -61,8 +76,10 @@ module "compute_fleet" {
 # VPC teardown. On destroy this runs first; on create it is a no-op.
 resource "null_resource" "cleanup_compute_nodes" {
   triggers = {
-    vpc_id = module.network.vpc_id
-    region = var.aws_region
+    vpc_id    = module.network.vpc_id
+    region    = var.aws_region
+    namespace = var.namespace
+    env       = var.env
   }
 
   provisioner "local-exec" {
@@ -87,6 +104,13 @@ resource "null_resource" "cleanup_compute_nodes" {
       else
         echo "No Slurm compute nodes to clean up."
       fi
+      echo "Cleaning up SSM parameters..."
+      for param in munge-key head-node-ip head-node-hostname; do
+        aws ssm delete-parameter \
+          --region "${self.triggers.region}" \
+          --name "/hpc/${self.triggers.namespace}/${self.triggers.env}/$param" 2>/dev/null || true
+      done
+      echo "SSM cleanup done."
     EOT
   }
 

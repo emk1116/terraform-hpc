@@ -121,3 +121,41 @@ resource "aws_iam_instance_profile" "compute_node" {
   role = aws_iam_role.compute_node.name
   tags = { Name = "${var.namespace}-${var.env}-compute-node-profile" }
 }
+
+# ── Login Node Role ────────────────────────────────────────────────────────────
+
+resource "aws_iam_role" "login_node" {
+  name = "${var.namespace}-${var.env}-login-node-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+    }]
+  })
+
+  tags = { Name = "${var.namespace}-${var.env}-login-node-role" }
+}
+
+resource "aws_iam_role_policy" "login_node" {
+  name = "${var.namespace}-${var.env}-login-node-policy"
+  role = aws_iam_role.login_node.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid    = "SSMReadOnly"
+      Effect = "Allow"
+      Action = ["ssm:GetParameter", "ssm:GetParameters"]
+      Resource = "arn:aws:ssm:*:*:parameter/hpc/${var.namespace}/${var.env}/*"
+    }]
+  })
+}
+
+resource "aws_iam_instance_profile" "login_node" {
+  name = "${var.namespace}-${var.env}-login-node-profile"
+  role = aws_iam_role.login_node.name
+  tags = { Name = "${var.namespace}-${var.env}-login-node-profile" }
+}
