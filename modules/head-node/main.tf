@@ -35,6 +35,8 @@ resource "aws_instance" "head_node" {
     max_compute_nodes    = var.max_compute_nodes
     launch_template_name = var.launch_template_name
     slurm_db_password    = var.slurm_db_password
+    fsx_dns_name         = var.fsx_dns_name
+    fsx_mount_name       = var.fsx_mount_name
   }))
 
   metadata_options {

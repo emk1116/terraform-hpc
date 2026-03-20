@@ -12,3 +12,5 @@ variable "launch_template_name" {}
 variable "slurm_db_password" {
   sensitive = true
 }
+variable "fsx_dns_name" {}
+variable "fsx_mount_name" {}

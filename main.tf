@@ -26,6 +26,14 @@ module "iam" {
   env       = var.env
 }
 
+module "fsx" {
+  source            = "./modules/fsx"
+  namespace         = var.namespace
+  env               = var.env
+  subnet_id         = module.network.subnet_id
+  security_group_id = module.network.security_group_id
+}
+
 module "head_node" {
   source = "./modules/head-node"
 
@@ -41,6 +49,8 @@ module "head_node" {
   max_compute_nodes    = var.max_compute_nodes
   launch_template_name = "${var.namespace}-${var.env}-compute-lt"
   slurm_db_password    = random_password.slurm_db.result
+  fsx_dns_name         = module.fsx.dns_name
+  fsx_mount_name       = module.fsx.mount_name
 }
 
 module "login_node" {
@@ -56,6 +66,8 @@ module "login_node" {
   aws_region           = var.aws_region
   max_compute_nodes    = var.max_compute_nodes
   head_node_private_ip = module.head_node.private_ip
+  fsx_dns_name         = module.fsx.dns_name
+  fsx_mount_name       = module.fsx.mount_name
 }
 
 module "compute_fleet" {
@@ -70,6 +82,8 @@ module "compute_fleet" {
   key_name             = aws_key_pair.hpc_key.key_name
   aws_region           = var.aws_region
   max_compute_nodes    = var.max_compute_nodes
+  fsx_dns_name         = module.fsx.dns_name
+  fsx_mount_name       = module.fsx.mount_name
 }
 
 # Terminates Slurm-launched compute nodes (not in Terraform state) before

@@ -27,6 +27,7 @@ echo "Private IP: $PRIVATE_IP | Hostname: $HOSTNAME"
 # ── Install packages ──────────────────────────────────────────────────────────
 yum update -y
 amazon-linux-extras install epel -y
+amazon-linux-extras install lustre7 -y
 yum install -y \
   slurm slurm-slurmctld slurm-slurmdbd \
   munge munge-devel \
@@ -35,6 +36,10 @@ yum install -y \
 
 # Create slurm user (AL2 EPEL RPM does not always create it automatically)
 useradd -r -d /var/lib/slurm -s /sbin/nologin slurm 2>/dev/null || true
+
+# Create cluster users with consistent UIDs (must match compute and login nodes)
+useradd -u 2001 -m -s /bin/bash user1 2>/dev/null || true
+useradd -u 2002 -m -s /bin/bash user2 2>/dev/null || true
 
 # ── MariaDB setup ─────────────────────────────────────────────────────────────
 systemctl enable mariadb
@@ -226,5 +231,38 @@ sleep 15
 sacctmgr -i add cluster $CLUSTER_NAME 2>/dev/null || true
 sacctmgr -i add account default Description="Default" Organization="HPC" 2>/dev/null || true
 sacctmgr -i add user ec2-user DefaultAccount=default AdminLevel=Admin 2>/dev/null || true
+sacctmgr -i add user user1 DefaultAccount=default 2>/dev/null || true
+sacctmgr -i add user user2 DefaultAccount=default 2>/dev/null || true
 
+# ── FSx for Lustre mount ──────────────────────────────────────────────────────
+FSX_DNS="${fsx_dns_name}"
+FSX_MOUNT="${fsx_mount_name}"
+
+mkdir -p /fsx
+
+echo "Mounting FSx for Lustre (${fsx_dns_name})..."
+for i in $(seq 1 20); do
+  mount -t lustre -o noatime,flock "$FSX_DNS@tcp:/$FSX_MOUNT" /fsx && echo "FSx mounted" && break
+  echo "FSx mount attempt $i/20 failed, retrying in 15s..."
+  sleep 15
+done
+
+# Persist in fstab
+if ! grep -q "$FSX_DNS" /etc/fstab; then
+  echo "$FSX_DNS@tcp:/$FSX_MOUNT  /fsx  lustre  defaults,noatime,flock,_netdev  0 0" >> /etc/fstab
+fi
+
+# ── Create multi-user directory structure on FSx ──────────────────────────────
+mkdir -p /fsx/home /fsx/work /fsx/shared
+chmod 755 /fsx/home /fsx/work
+chmod 777 /fsx/shared
+
+for u in user1 user2; do
+  mkdir -p /fsx/home/$u /fsx/work/$u
+  chown $u:$u /fsx/home/$u /fsx/work/$u
+  chmod 700 /fsx/work/$u
+  chmod 755 /fsx/home/$u
+done
+
+echo "FSx directory structure ready."
 echo "=== Head Node Init Complete: $(date) ==="

@@ -31,6 +31,8 @@ resource "aws_launch_template" "compute" {
     env               = var.env
     aws_region        = var.aws_region
     max_compute_nodes = var.max_compute_nodes
+    fsx_dns_name      = var.fsx_dns_name
+    fsx_mount_name    = var.fsx_mount_name
   }))
 
   metadata_options {

@@ -33,6 +33,8 @@ resource "aws_instance" "login_node" {
     aws_region           = var.aws_region
     max_compute_nodes    = var.max_compute_nodes
     head_node_private_ip = var.head_node_private_ip
+    fsx_dns_name         = var.fsx_dns_name
+    fsx_mount_name       = var.fsx_mount_name
   }))
 
   metadata_options {

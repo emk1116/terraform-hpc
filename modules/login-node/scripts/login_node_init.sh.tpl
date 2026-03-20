@@ -23,10 +23,15 @@ echo "Login node IP: $PRIVATE_IP"
 # ── Install packages ──────────────────────────────────────────────────────────
 yum update -y
 amazon-linux-extras install epel -y
+amazon-linux-extras install lustre7 -y
 yum install -y slurm munge munge-devel awscli libcgroup libcgroup-tools
 
 # Create slurm user
 useradd -r -d /var/lib/slurm -s /sbin/nologin slurm 2>/dev/null || true
+
+# Create cluster users with consistent UIDs (must match head and compute nodes)
+useradd -u 2001 -m -s /bin/bash user1 2>/dev/null || true
+useradd -u 2002 -m -s /bin/bash user2 2>/dev/null || true
 
 # ── Get munge key from SSM ────────────────────────────────────────────────────
 echo "Fetching munge key..."
@@ -102,6 +107,24 @@ chmod 644 /etc/slurm/slurm.conf
 
 # Start munge (required for Slurm auth — no slurmctld/slurmd on login node)
 systemctl enable munge && systemctl start munge
+
+# ── FSx for Lustre mount ──────────────────────────────────────────────────────
+FSX_DNS="${fsx_dns_name}"
+FSX_MOUNT="${fsx_mount_name}"
+
+mkdir -p /fsx
+
+echo "Mounting FSx for Lustre..."
+for i in $(seq 1 20); do
+  mount -t lustre -o noatime,flock "$FSX_DNS@tcp:/$FSX_MOUNT" /fsx && echo "FSx mounted" && break
+  echo "FSx mount attempt $i/20 failed, retrying in 15s..."
+  sleep 15
+done
+
+# Persist in fstab
+if ! grep -q "$FSX_DNS" /etc/fstab; then
+  echo "$FSX_DNS@tcp:/$FSX_MOUNT  /fsx  lustre  defaults,noatime,flock,_netdev  0 0" >> /etc/fstab
+fi
 
 # ── Layer A: System resource limits ──────────────────────────────────────────
 cat >> /etc/security/limits.conf << 'LIMITS'

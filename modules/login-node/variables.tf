@@ -8,3 +8,5 @@ variable "key_name" {}
 variable "aws_region" {}
 variable "max_compute_nodes" {}
 variable "head_node_private_ip" {}
+variable "fsx_dns_name" {}
+variable "fsx_mount_name" {}
