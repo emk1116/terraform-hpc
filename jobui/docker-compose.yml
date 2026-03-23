@@ -1,0 +1,37 @@
+version: '3.9'
+
+services:
+  backend:
+    build: ./backend
+    environment:
+      - S3_BUCKET=${S3_BUCKET}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - JWT_SECRET=${JWT_SECRET}
+      - FSX_BASE=${FSX_BASE:-/fsx/work}
+      - SLURM_PARTITION=${SLURM_PARTITION:-main}
+      - DB_PATH=/data/hpc.db
+      - DEFAULT_USERS=${DEFAULT_USERS:-admin:admin123:user1:1,user1:user1pass:user1:0,user2:user2pass:user2:0}
+    volumes:
+      - hpc_data:/data
+      - /fsx:/fsx            # FSx mounted from host
+      - /tmp/jobs:/tmp/jobs  # job scripts temp dir
+    network_mode: host       # needed for Slurm socket access
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  hpc_data:
+    driver: local
