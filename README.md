@@ -1,68 +1,56 @@
 # Titan HPC Cluster
 
-Production-style HPC cluster on AWS using Slurm with autoscaling compute nodes, shared FSx for Lustre storage, and an S3-backed data pipeline — deployed entirely via Terraform.
+Production-style HPC cluster on AWS using Slurm with autoscaling compute nodes, shared FSx for Lustre storage, an S3-backed data pipeline, and a browser-based web platform — deployed entirely via Terraform.
 
 ## Architecture
 
 ```
-                        Internet
-                            │
-                  SSH (your IP only)    aws s3 cp (input)
-                            │                  │
-              ┌─────────────▼──────────────┐   │
-              │         Login Node          │   │
-              │         (t3.small)          │◄──┘
-              │                             │
-              │  • Job submission only      │
-              │  • sbatch / squeue / sinfo  │
-              │  • aws s3 cp (upload input) │
-              │  • CPU/memory enforced      │
-              └─────────────┬───────────────┘
-                            │ SSH (private)
-          ┌─────────────────▼─────────────────────────────┐
-          │                  AWS VPC                       │
-          │                                                │
-          │  ┌──────────────────┐                          │
-          │  │    Head Node     │                          │
-          │  │    (t3.micro)    │◄── Slurm RPC             │
-          │  │  • slurmctld     │                          │
-          │  │  • slurmdbd      │                          │
-          │  │  • MariaDB       │                          │
-          │  │  • resume.sh     │                          │
-          │  │  • suspend.sh    │                          │
-          │  └────────┬─────────┘                          │
-          │           │ ec2:RunInstances                   │
-          │  ┌────────▼──────────────────┐                 │
-          │  │     Compute Nodes         │                 │
-          │  │  (t3.micro × 0–N)         │                 │
-          │  │                           │                 │
-          │  │  • slurmd                 │◄─── S3 input    │
-          │  │  • munge                  │────► S3 results │
-          │  │  • aws s3 cp              │                 │
-          │  │  Launched on job submit   │                 │
-          │  │  Terminated after idle    │                 │
-          │  └───────────┬───────────────┘                 │
-          │              │ mount /fsx                      │
-          │  ┌───────────▼───────────────┐                 │
-          │  │   FSx for Lustre (1.2TB)  │                 │
-          │  │                           │                 │
-          │  │  /fsx/home/<user>  (755)  │                 │
-          │  │  /fsx/work/<user>  (700)  │                 │
-          │  │  /fsx/shared       (777)  │                 │
-          │  │  Mounted on all nodes     │                 │
-          │  └───────────────────────────┘                 │
-          └────────────────────────────────────────────────┘
-                                │
-                    ┌───────────▼───────────┐
-                    │   S3 Data Bucket      │
-                    │                       │
-                    │  input/               │◄── User uploads
-                    │  results/<job_id>/    │──► Job output
-                    │                       │
-                    │  • AES256 encrypted   │
-                    │  • Versioning on      │
-                    │  • No public access   │
-                    └───────────────────────┘
+  User Browser          Login Node (SSH)         Head Node (t3.micro)
+  ────────────          ────────────────         ────────────────────
+  http://<ip>  ──────►  SSH entry point          Nginx :80
+                         job submission            ├─ /api/* ──► FastAPI :8000
+                         squeue / sacct            │              ├─ JWT auth
+                                                   │              ├─ SQLite
+                                                   │              ├─ boto3 → S3
+                                                   │              └─ sbatch/sacct
+                                                   └─ /     ──► React SPA
+                                  │ Slurm RPC      │
+                                  │ ec2:RunInstances│
+                        ┌─────────▼──────────────────────────────────┐
+                        │                  AWS VPC                    │
+                        │                                             │
+                        │  ┌──────────────────┐                       │
+                        │  │    Head Node     │                       │
+                        │  │    (t3.micro)    │                       │
+                        │  │  • slurmctld     │                       │
+                        │  │  • slurmdbd      │                       │
+                        │  │  • MariaDB       │                       │
+                        │  │  • jobui stack   │                       │
+                        │  └────────┬─────────┘                       │
+                        │           │ ec2:RunInstances                │
+                        │  ┌────────▼──────────────────┐              │
+                        │  │     Compute Nodes         │              │
+                        │  │  (t3.micro × 0–N)         │◄─── S3 input │
+                        │  │  Launched on job submit   │────► S3 results
+                        │  │  Terminated after idle    │              │
+                        │  └───────────┬───────────────┘              │
+                        │              │ mount /fsx                   │
+                        │  ┌───────────▼───────────────┐              │
+                        │  │   FSx for Lustre (1.2TB)  │              │
+                        │  │  /fsx/home/<user>  (755)  │              │
+                        │  │  /fsx/work/<user>  (700)  │              │
+                        │  │  /fsx/shared       (777)  │              │
+                        │  └───────────────────────────┘              │
+                        └─────────────────────────────────────────────┘
+                                          │
+                              ┌───────────▼───────────┐
+                              │   S3 Data Bucket      │
+                              │  input/{user_id}/     │◄── uploads (UI or CLI)
+                              │  results/{job_id}/    │──► job output
+                              │  • AES256 encrypted   │
+                              │  • Versioning on      │
+                              │  • No public access   │
+                              └───────────────────────┘
 ```
 
 **Autoscaling**: Slurm's `ResumeProgram` launches EC2 instances when jobs are queued. `SuspendProgram` terminates them after 120 seconds idle. No compute instances run when the cluster is idle.
@@ -71,7 +59,11 @@ Production-style HPC cluster on AWS using Slurm with autoscaling compute nodes, 
 
 **S3 pipeline**: Jobs download input from S3 to FSx, process locally, upload results back to S3 under `results/<job_id>/`, then clean up FSx. No data persists on FSx between jobs.
 
-## Modules
+**Web platform**: A FastAPI + React UI runs on the head node. Users submit jobs, upload files, and download results from a browser — no SSH required.
+
+---
+
+## Terraform Modules
 
 | Module | Purpose |
 |---|---|
@@ -83,11 +75,15 @@ Production-style HPC cluster on AWS using Slurm with autoscaling compute nodes, 
 | `fsx` | FSx for Lustre SCRATCH_1 shared filesystem |
 | `s3` | S3 data bucket with encryption, versioning, and public access block |
 
+---
+
 ## Prerequisites
 
 - Terraform >= 1.14.7
 - AWS CLI configured (`aws configure`)
 - An SSH key pair
+
+---
 
 ## Quick Start
 
@@ -110,12 +106,20 @@ terraform apply -var-file=non-prod.tfvars
 ```
 > FSx takes ~13 minutes to become available. Full cluster init takes ~15 minutes total.
 
-**4. Connect (login node is your only entry point)**
+**4. Connect via SSH (optional — CLI path)**
 ```bash
 ssh -i ~/.ssh/titan-hpc ec2-user@<login_node_public_ip>
 ```
 
-**5. Run the S3 pipeline**
+**5. Or open the web UI (no SSH needed)**
+```bash
+# On the head node — one-time setup
+cd jobui
+./setup.sh   # installs Docker, prompts for S3 bucket + JWT secret, starts stack
+```
+Access at `http://<head_node_public_ip>/`
+
+**6. Run the S3 pipeline via CLI**
 ```bash
 # Upload input data from your machine
 aws s3 cp mydata.txt s3://<bucket>/input/
@@ -132,45 +136,98 @@ aws s3 ls s3://<bucket>/results/<job_id>/
 aws s3 cp s3://<bucket>/results/<job_id>/summary.txt -
 ```
 
-**6. Run the FSx test job (no S3 required)**
-```bash
-sudo -u user1 sbatch /fsx/home/user1/fsx_test_job.sh
-squeue
-sudo ls /fsx/work/user1/
-cat /fsx/shared/fsx_test.log
-```
-
 **7. Destroy everything**
 ```bash
 bash destroy.sh
 ```
 > Compute nodes, FSx, and S3 bucket (including all data) are fully destroyed. No charges remain.
 
+---
+
+## Web Platform (jobui/)
+
+A browser-based UI for submitting and monitoring jobs without SSH access. Runs on the head node via Docker Compose.
+
+### Features
+
+- JWT-authenticated login — no SSH required
+- Drag-and-drop file upload directly to S3 (`input/{user_id}/`)
+- Job submission form with CPU / memory / time controls
+- Live job status with 5-second polling
+- Log viewer streaming from FSx
+- Result file listing with presigned S3 download URLs
+- Admin view of all users' jobs
+- Per-user S3 isolation
+
+### Stack
+
+| Component | Technology |
+|---|---|
+| Backend | FastAPI + SQLite + boto3 + subprocess Slurm |
+| Frontend | React 18 + Vite + Tailwind CSS |
+| Proxy | nginx (reverse proxy + SPA fallback, 500 MB upload limit) |
+| Runtime | Docker Compose (`network_mode: host` for Slurm socket access) |
+
+### Setup
+
+```bash
+# On the head node
+cd jobui
+chmod +x setup.sh
+./setup.sh
+```
+
+The script installs Docker if needed, prompts for `S3_BUCKET` and `JWT_SECRET`, configures sudoers for `sbatch`/`scancel`, and starts the stack.
+
+### Default Credentials
+
+> **Change these immediately in production.**
+
+| Username | Password | Role |
+|---|---|---|
+| `admin` | `admin123` | Admin — sees all jobs |
+| `user1` | `user1pass` | Standard user |
+| `user2` | `user2pass` | Standard user |
+
+### Key URLs
+
+| URL | Purpose |
+|---|---|
+| `http://<head_node_ip>/` | Web UI |
+| `http://<head_node_ip>/api/docs` | Interactive API docs (Swagger) |
+| `http://<head_node_ip>/api/health` | Health check |
+
+Full reference: [`jobui/README.md`](jobui/README.md)
+
+---
+
 ## S3 Data Pipeline
 
 ### Flow
 
 ```
-Local machine                Login Node              Compute Node               S3 Bucket
-─────────────                ──────────              ────────────               ─────────
-aws s3 cp → input/    ──►    sbatch job    ──►    aws s3 cp input/ → /fsx    ──►  (download)
-                                                   [process on FSx]
-                                                   aws s3 cp output/ → results/<job_id>/
-                                                   rm -rf /fsx/work/$USER/$JOB_ID/
+Browser / CLI             Login Node              Compute Node               S3 Bucket
+─────────────             ──────────              ────────────               ─────────
+Upload → input/  ──────►  sbatch job   ──────►  aws s3 cp input/ → /fsx  ──►  (download)
+  (UI or aws s3 cp)                               [process on FSx]
+                                                  aws s3 cp output/ → results/<job_id>/
+                                                  rm -rf /fsx/work/$USER/$JOB_ID/
 ```
 
 ### S3 Bucket Structure
 
 ```
 s3://<bucket>/
-├── input/              ← Upload your data here before submitting
-│   ├── mydata.txt
-│   └── model.dat
+├── input/
+│   └── {user_id}/          ← Web UI uploads (per-user isolation)
+│       └── mydata.csv
+├── input/                  ← CLI uploads (shared)
+│   └── mydata.txt
 └── results/
-    ├── 42/             ← One folder per job ID
+    ├── 42/                 ← One folder per Slurm job ID
     │   └── summary.txt
     └── 43/
-        └── summary.txt
+        └── output.csv
 ```
 
 ### Environment Variables (available on all nodes)
@@ -197,9 +254,11 @@ All three node roles (head, compute, login) have identical S3 permissions scoped
 - Always clean up `/fsx/work/$USER/$JOB_ID/` at end of job
 - S3 uploads include 3-attempt retry with 5s backoff
 
+---
+
 ## Configuration
 
-All settings are in your `non-prod.tfvars`:
+All Terraform settings are in `non-prod.tfvars`:
 
 | Variable | Default | Description |
 |---|---|---|
@@ -211,13 +270,15 @@ All settings are in your `non-prod.tfvars`:
 | `max_compute_nodes` | `2` | Maximum concurrent compute nodes |
 | `aws_region` | `us-east-1` | AWS region |
 
+---
+
 ## Shared Filesystem (FSx for Lustre)
 
 All nodes (head, login, compute) mount `/fsx` automatically at boot:
 
 | Path | Permissions | Purpose |
 |---|---|---|
-| `/fsx/home/<user>` | 755 | User home on shared FS |
+| `/fsx/home/<user>` | 755 | User home on shared FS — job scripts live here |
 | `/fsx/work/<user>` | 700 | Job working directory, owner only |
 | `/fsx/shared` | 777 | World-writable scratch space |
 
@@ -228,7 +289,7 @@ Pre-created users with consistent UIDs across all nodes:
 | `user1` | 2001 | Test user 1 |
 | `user2` | 2002 | Test user 2 |
 
-Use `sudo -u user1 sbatch ...` to submit jobs as a cluster user.
+---
 
 ## Slurm Node Spec
 
@@ -237,6 +298,18 @@ Compute nodes are defined in `slurm.conf` as:
 CPUs=2  RealMemory=900  State=CLOUD  ResumeTimeout=600
 ```
 `ResumeTimeout=600` accommodates Lustre client install (~7 min) during compute node boot.
+
+---
+
+## Job Scripts
+
+| File | Description |
+|---|---|
+| `jobs/job.sh` | Basic hello world array job (output to `/tmp`) |
+| `jobs/fsx_test_job.sh` | FSx array job — writes to `/fsx/work/$USER/` |
+| `jobs/s3_pipeline_job.sh` | Full S3 pipeline — S3 download → FSx compute → S3 upload → FSx cleanup |
+
+---
 
 ## Cost
 
@@ -252,10 +325,13 @@ CPUs=2  RealMemory=900  State=CLOUD  ResumeTimeout=600
 
 > **Cost warning**: FSx is the dominant ongoing cost. Run `bash destroy.sh` immediately after testing. S3 and FSx are both destroyed cleanly — no orphaned resources.
 
+---
+
 ## Security
 
 - SSH access restricted to `ssh_allowed_cidr` only (login node)
 - Head node has no direct internet SSH — reachable only from login node
+- Web UI secured with JWT — tokens expire after 8 hours
 - IMDSv2 required on head and login nodes
 - EBS volumes encrypted on all nodes
 - S3 bucket: AES256 encryption, versioning, all public access blocked
@@ -275,13 +351,7 @@ Four independent layers enforce no-compute-on-login-node policy:
 | C | Process watchdog (cron) | Kills any process >50% CPU for >60s |
 | D | Shell policy (`/etc/profile.d/`) | `python`, `python3`, `mpirun`, `mpiexec` blocked with message |
 
-## Jobs
-
-| File | Description |
-|---|---|
-| `jobs/job.sh` | Basic hello world array job (output to `/tmp`) |
-| `jobs/fsx_test_job.sh` | FSx array job — writes to `/fsx/work/$USER/` |
-| `jobs/s3_pipeline_job.sh` | Full S3 pipeline — S3 download → FSx compute → S3 upload → FSx cleanup |
+---
 
 ## License
 
