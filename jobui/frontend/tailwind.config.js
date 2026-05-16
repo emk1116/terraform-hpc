@@ -1,22 +1,20 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
-  darkMode: 'class',
+  content: ["./index.html", "./src/**/*.{js,jsx}"],
   theme: {
     extend: {
       fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
-        mono: ['JetBrains Mono', 'Menlo', 'Monaco', 'Consolas', 'monospace'],
+        display: ['"JetBrains Mono"', "monospace"],
+        sans: ['"Inter"', "system-ui", "sans-serif"],
       },
       colors: {
-        slate: {
-          950: '#020617',
-        },
-      },
-      animation: {
-        'pulse-slow': 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+        ink: "#0a0a0a",
+        paper: "#fafaf9",
+        accent: "#d4ff00",
+        muted: "#737373",
+        border: "#e5e5e5",
       },
     },
   },
   plugins: [],
-}
+};

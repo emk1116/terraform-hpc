@@ -1,37 +1,32 @@
+"""FastAPI application entrypoint."""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
-from app.database import init_db
-from app.routers import auth, files, jobs
-from app.services import slurm_service
-from app.utils.logging import get_logger
+from app.routers import auth, gpus, jobs, models, uploads, users
 
-logger = get_logger(__name__)
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    settings = get_settings()
-    logger.info("Starting HPC Platform API", extra={"db_path": settings.db_path})
-    try:
-        init_db(settings.db_path, settings.default_users)
-        logger.info("Database initialized successfully")
-    except Exception as e:
-        logger.error("Database initialization failed", extra={"error": str(e)})
-        raise
-    yield
-    logger.info("Shutting down HPC Platform API")
-
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="Titan HPC Platform API",
-    description="Enterprise HPC job management API with Slurm and S3 integration",
-    version="1.0.0",
-    lifespan=lifespan,
+    title="Titan HPC jobui",
+    version="0.1.0",
+    docs_url="/api/docs",
+    openapi_url="/api/openapi.json",
 )
 
+# CORS — ALB terminates TLS; we don't expect cross-origin, but allow for dev
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -40,18 +35,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Routers
 app.include_router(auth.router)
-app.include_router(files.router)
+app.include_router(users.router)
+app.include_router(models.router)
+app.include_router(gpus.router)
+app.include_router(uploads.router)
 app.include_router(jobs.router)
 
 
-@app.get("/health", tags=["health"])
-async def health_check():
-    slurm_available = slurm_service.is_available()
-    settings = get_settings()
-    return {
-        "status": "ok",
-        "slurm_available": slurm_available,
-        "s3_configured": bool(settings.s3_bucket),
-        "version": "1.0.0",
-    }
+@app.get("/api/health")
+def health():
+    return {"status": "ok", "team": get_settings().TEAM_NAME}
+
+
+# ---------------------------------------------------------------------------
+# Static SPA — the Dockerfile copies the React build into /app/static
+# nginx handles the / path in production; this is the fallback for dev.
+# ---------------------------------------------------------------------------
+
+STATIC_DIR = Path("/app/static")
+if STATIC_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
+
+    @app.get("/{full_path:path}")
+    def spa(full_path: str):
+        # API calls go through routers above; this is the SPA fallback
+        index = STATIC_DIR / "index.html"
+        if index.exists():
+            return FileResponse(index)
+        return {"error": "static not built"}

@@ -1,114 +1,88 @@
-import React, { createContext, useContext } from 'react'
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
-import { useAuth } from './hooks/useAuth'
-import Navbar from './components/Navbar'
-import Login from './pages/Login'
-import Dashboard from './pages/Dashboard'
-import Upload from './pages/Upload'
-import SubmitJob from './pages/SubmitJob'
-import JobDetail from './pages/JobDetail'
+import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { useAuth } from "./auth.jsx";
+import Login from "./pages/Login.jsx";
+import Submit from "./pages/Submit.jsx";
+import Jobs from "./pages/Jobs.jsx";
+import JobDetail from "./pages/JobDetail.jsx";
+import Admin from "./pages/Admin.jsx";
+import ChangePassword from "./pages/ChangePassword.jsx";
 
-export const AuthContext = createContext(null)
-
-export const useAuthContext = () => {
-  const ctx = useContext(AuthContext)
-  if (!ctx) throw new Error('useAuthContext must be used within AuthContext.Provider')
-  return ctx
+function RequireAuth({ children }) {
+  const { user, loading } = useAuth();
+  const loc = useLocation();
+  if (loading) return <div className="p-8 mono">loading...</div>;
+  if (!user) return <Navigate to="/login" state={{ from: loc }} replace />;
+  if (user.must_change_password && loc.pathname !== "/change-password") {
+    return <Navigate to="/change-password" replace />;
+  }
+  return children;
 }
 
-const ProtectedRoute = ({ children }) => {
-  const { isAuthenticated, loading } = useAuthContext()
-  const location = useLocation()
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-10 h-10 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-          <p className="text-slate-400 text-sm">Loading...</p>
-        </div>
-      </div>
-    )
-  }
-
-  if (!isAuthenticated) {
-    return <Navigate to="/login" state={{ from: location }} replace />
-  }
-
-  return children
-}
-
-const Layout = ({ children }) => (
-  <div className="min-h-screen bg-slate-950 flex flex-col">
-    <Navbar />
-    <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      {children}
-    </main>
-  </div>
-)
-
-const AppRoutes = () => {
-  const { isAuthenticated } = useAuthContext()
-
+function Shell({ children }) {
+  const { user, logout } = useAuth();
   return (
-    <Routes>
-      <Route
-        path="/login"
-        element={isAuthenticated ? <Navigate to="/" replace /> : <Login />}
-      />
-      <Route
-        path="/"
-        element={
-          <ProtectedRoute>
-            <Layout>
-              <Dashboard />
-            </Layout>
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/upload"
-        element={
-          <ProtectedRoute>
-            <Layout>
-              <Upload />
-            </Layout>
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/submit"
-        element={
-          <ProtectedRoute>
-            <Layout>
-              <SubmitJob />
-            </Layout>
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/jobs/:id"
-        element={
-          <ProtectedRoute>
-            <Layout>
-              <JobDetail />
-            </Layout>
-          </ProtectedRoute>
-        }
-      />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
-  )
+    <div className="min-h-screen flex flex-col">
+      <header className="border-b border-border bg-paper">
+        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+          <Link to="/" className="flex items-center gap-3">
+            <div className="w-8 h-8 bg-accent flex items-center justify-center mono font-bold">
+              t
+            </div>
+            <span className="mono font-bold tracking-tight">TITAN HPC</span>
+          </Link>
+          <nav className="flex items-center gap-6 text-sm">
+            <Link to="/submit" className="hover:underline">Submit</Link>
+            <Link to="/jobs" className="hover:underline">Jobs</Link>
+            {user?.role === "admin" && (
+              <Link to="/admin" className="hover:underline">Admin</Link>
+            )}
+            <span className="text-muted mono text-xs">{user?.username}</span>
+            <button onClick={logout} className="btn-ghost btn text-xs py-1">
+              sign out
+            </button>
+          </nav>
+        </div>
+      </header>
+      <main className="flex-1 max-w-6xl mx-auto w-full px-6 py-8">{children}</main>
+      <footer className="border-t border-border mono text-xs text-muted p-4 text-center">
+        titan-hpc &middot; gpu inference platform
+      </footer>
+    </div>
+  );
 }
 
 export default function App() {
-  const auth = useAuth()
-
   return (
-    <AuthContext.Provider value={auth}>
-      <BrowserRouter>
-        <AppRoutes />
-      </BrowserRouter>
-    </AuthContext.Provider>
-  )
+    <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route
+        path="/change-password"
+        element={
+          <RequireAuth>
+            <Shell><ChangePassword /></Shell>
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/"
+        element={<Navigate to="/submit" replace />}
+      />
+      <Route
+        path="/submit"
+        element={<RequireAuth><Shell><Submit /></Shell></RequireAuth>}
+      />
+      <Route
+        path="/jobs"
+        element={<RequireAuth><Shell><Jobs /></Shell></RequireAuth>}
+      />
+      <Route
+        path="/jobs/:id"
+        element={<RequireAuth><Shell><JobDetail /></Shell></RequireAuth>}
+      />
+      <Route
+        path="/admin"
+        element={<RequireAuth><Shell><Admin /></Shell></RequireAuth>}
+      />
+    </Routes>
+  );
 }

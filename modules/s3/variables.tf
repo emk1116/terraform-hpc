@@ -1,2 +1,0 @@
-variable "namespace" {}
-variable "env" {}

@@ -3,65 +3,35 @@
 @tailwind utilities;
 
 @layer base {
-  * {
-    box-sizing: border-box;
-  }
-
   html {
-    scroll-behavior: smooth;
+    font-family: 'Inter', system-ui, sans-serif;
   }
-
   body {
-    min-height: 100vh;
-    background-color: #020617;
-    color: #f1f5f9;
+    @apply bg-paper text-ink;
+    font-feature-settings: "ss01", "cv11";
   }
-
-  ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-  }
-
-  ::-webkit-scrollbar-track {
-    background: #0f172a;
-  }
-
-  ::-webkit-scrollbar-thumb {
-    background: #334155;
-    border-radius: 3px;
-  }
-
-  ::-webkit-scrollbar-thumb:hover {
-    background: #475569;
+  code, pre, .mono {
+    font-family: 'JetBrains Mono', monospace;
   }
 }
 
 @layer components {
+  .btn {
+    @apply inline-flex items-center justify-center px-4 py-2 font-medium border border-ink bg-ink text-paper transition hover:bg-paper hover:text-ink active:translate-y-[1px];
+  }
   .btn-primary {
-    @apply inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-lg transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply bg-accent text-ink border-ink hover:bg-ink hover:text-accent;
   }
-
-  .btn-secondary {
-    @apply inline-flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 font-medium rounded-lg transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed;
+  .btn-ghost {
+    @apply bg-paper text-ink border-border hover:border-ink;
   }
-
-  .btn-danger {
-    @apply inline-flex items-center gap-2 px-4 py-2 bg-red-700 hover:bg-red-600 text-white font-medium rounded-lg transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed;
+  .input {
+    @apply w-full px-3 py-2 border border-border bg-paper text-ink focus:outline-none focus:border-ink;
   }
-
   .card {
-    @apply bg-slate-800 border border-slate-700 rounded-xl p-6;
+    @apply border border-border bg-paper p-6;
   }
-
-  .form-input {
-    @apply w-full bg-slate-900 border border-slate-600 text-slate-100 rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent placeholder-slate-500 font-mono text-sm;
-  }
-
-  .form-label {
-    @apply block text-sm font-medium text-slate-300 mb-1.5;
-  }
-
-  .table-header {
-    @apply text-xs font-semibold text-slate-400 uppercase tracking-wider;
+  .pill {
+    @apply inline-block px-2 py-0.5 text-xs border border-ink mono;
   }
 }

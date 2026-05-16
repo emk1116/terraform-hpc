@@ -1,75 +1,69 @@
+output "jobui_url" {
+  description = "URL for the web UI. Point your browser here to log in."
+  value       = module.alb.https_url
+}
+
+output "alb_dns_name" {
+  description = "ALB DNS name. Create your CNAME/Alias against this."
+  value       = module.alb.dns_name
+}
+
 output "login_node_public_ip" {
-  value       = module.login_node.public_ip
-  description = "Public IP of the login node (entry point for users)"
+  description = "Public IP of the login node for SSH access (if enabled)."
+  value       = var.enable_login_node ? module.login_node[0].public_ip : null
 }
 
-output "login_node_ssh" {
-  value       = "ssh -i ~/.ssh/titan-hpc ec2-user@${module.login_node.public_ip}"
-  description = "SSH to login node — use this to access the cluster"
+output "head_node_instance_id" {
+  description = "Head node EC2 instance ID. Use with 'aws ssm start-session --target <id>' for shell access."
+  value       = module.head_node.instance_id
 }
 
-output "head_node_private_ip" {
-  value       = module.head_node.private_ip
-  description = "Private IP of the head node (reachable only from login node)"
+output "aurora_writer_endpoint" {
+  description = "Aurora cluster writer endpoint (for debugging; reachable only from head/compute nodes)."
+  value       = module.aurora.writer_endpoint
+  sensitive   = false
 }
 
-output "compute_asg_name" {
-  value       = module.compute_fleet.asg_name
-  description = "Name of the compute Auto Scaling Group"
-}
-
-output "s3_bucket_name" {
+output "s3_data_bucket" {
+  description = "S3 bucket for input uploads and result outputs."
   value       = module.s3.bucket_name
-  description = "S3 bucket for pipeline input/output"
 }
 
-output "s3_pipeline_paths" {
-  value = {
-    input   = "s3://${module.s3.bucket_name}/input/"
-    results = "s3://${module.s3.bucket_name}/results/"
-  }
-  description = "S3 paths for pipeline data flow"
+output "ecr_registry_url" {
+  description = "ECR registry URL. Push model images as <registry>/<repo>:<tag>."
+  value       = module.ecr.registry_url
 }
 
 output "fsx_dns_name" {
+  description = "FSx Lustre DNS name."
   value       = module.fsx.dns_name
-  description = "FSx for Lustre DNS name"
 }
 
-output "fsx_cost_warning" {
-  value       = "WARNING: FSx SCRATCH_1 (1200 GB) is running. Run 'terraform destroy' after testing to avoid ongoing charges (~$140/month)."
-  description = "Cost reminder"
+output "aurora_master_secret_arn" {
+  description = "Secrets Manager ARN holding the Aurora master password. Retrieve via: aws secretsmanager get-secret-value --secret-id <arn>"
+  value       = module.aurora.master_password_secret_arn
+  sensitive   = true
 }
 
-output "usage_instructions" {
-  value = <<-EOT
-    === Cluster Ready ===
-
-    1. SSH to login node (your only entry point):
-       ssh -i ~/.ssh/titan-hpc ec2-user@${module.login_node.public_ip}
-
-    2. From login node, submit jobs:
-       sbatch ~/job.sh
-       squeue
-       sinfo
-       sacct -a
-
-    3. To reach head node (from login node only):
-       ssh ec2-user@${module.head_node.private_ip}
-
-    NOTE: Direct SSH to head node from internet is blocked.
-
-    4. FSx shared filesystem is mounted at /fsx on all nodes:
-       /fsx/home/<user>    — home directory (755)
-       /fsx/work/<user>    — job output (700, writable by owner only)
-       /fsx/shared         — world-writable scratch (777)
-
-    5. Submit FSx test job (as user1 or user2):
-       sudo -u user1 sbatch /home/ec2-user/fsx_test_job.sh
-
-    6. S3 pipeline — upload input, submit, verify results:
-       aws s3 cp test.txt s3://${module.s3.bucket_name}/input/
-       sudo -u user1 sbatch /home/ec2-user/s3_pipeline_job.sh
-       aws s3 ls s3://${module.s3.bucket_name}/results/
+output "admin_bootstrap_command" {
+  description = "Command to run on the head node (via SSM) to set the initial admin password."
+  value       = <<-EOT
+    # On head node:
+    sudo docker exec jobui-backend python -m app.scripts.bootstrap_admin \
+      --email ${var.admin_email} \
+      --generate-password
   EOT
+}
+
+output "team_config_summary" {
+  description = "Summary of what was deployed."
+  value = {
+    team           = var.team_name
+    env            = var.env
+    region         = var.aws_region
+    primary_az     = var.primary_az
+    gpu_families   = var.gpu_families_enabled
+    member_count   = length(var.team_members)
+    team_budget    = var.team_monthly_budget_usd
+  }
 }

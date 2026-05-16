@@ -1,42 +1,71 @@
-from fastapi import APIRouter, HTTPException, status, Depends
-from typing import Dict, Any
+"""Auth router — login, password change, me."""
 
-from app.models.schemas import Token, LoginRequest, UserResponse
-from app.auth.jwt_handler import create_access_token
-from app.auth.dependencies import get_current_user
-from app.config import get_settings
-from app.database import get_user_by_username, verify_password
+from __future__ import annotations
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+from typing import Annotated
 
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-@router.post("/login", response_model=Token)
-async def login(request: LoginRequest) -> Token:
-    settings = get_settings()
-    user = get_user_by_username(settings.db_path, request.username)
+from app.auth import (
+    create_access_token,
+    get_current_user,
+    hash_password,
+    verify_password,
+)
+from app.database import get_db
+from app.models import AppUser, AuditLog
+from app.schemas import (
+    ChangePasswordRequest,
+    LoginRequest,
+    TokenResponse,
+    UserOut,
+)
 
-    if user is None or not verify_password(request.password, user["hashed_password"]):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    token_data = {
-        "sub": user["id"],
-        "username": user["username"],
-        "cluster_user": user["cluster_user"],
-        "is_admin": bool(user["is_admin"]),
-    }
-    access_token = create_access_token(token_data)
-    return Token(access_token=access_token)
+router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
-@router.get("/me", response_model=UserResponse)
-async def get_me(current_user: Dict[str, Any] = Depends(get_current_user)) -> UserResponse:
-    return UserResponse(
-        id=current_user["id"],
-        username=current_user["username"],
-        cluster_user=current_user["cluster_user"],
-        is_admin=bool(current_user["is_admin"]),
+@router.post("/login", response_model=TokenResponse)
+def login(
+    req: LoginRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    user = db.execute(
+        select(AppUser).where(AppUser.username == req.username)
+    ).scalar_one_or_none()
+
+    if user is None or not verify_password(req.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Account inactive")
+
+    token = create_access_token(user.id, user.username, user.role)
+
+    db.add(AuditLog(user_id=user.id, action="login"))
+    db.commit()
+
+    return TokenResponse(
+        access_token=token,
+        must_change_password=user.must_change_password,
     )
+
+
+@router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
+def change_password(
+    req: ChangePasswordRequest,
+    user: Annotated[AppUser, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    if not verify_password(req.current_password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Current password incorrect")
+
+    user.password_hash = hash_password(req.new_password)
+    user.must_change_password = False
+    db.add(AuditLog(user_id=user.id, action="change_password"))
+    db.commit()
+
+
+@router.get("/me", response_model=UserOut)
+def me(user: Annotated[AppUser, Depends(get_current_user)]):
+    return user

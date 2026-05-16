@@ -1,6 +1,125 @@
-namespace               = "titan"
-env                     = "non-prod"
-ssh_allowed_cidr        = "YOUR_IP/32"   # e.g. "1.2.3.4/32" — run: curl ifconfig.me
-head_node_instance_type = "t3.micro"
-compute_instance_type   = "t3.micro"
-max_compute_nodes       = 2
+# ============================================================================
+# Titan HPC — Team configuration
+# Copy this file to team-<name>.tfvars and edit the values below.
+# ============================================================================
+
+# Team identity — becomes the prefix on every AWS resource name
+team_name = "alpha"
+env       = "non-prod"
+
+# Region and AZ. Aurora + FSx + GPU compute all land in primary_az.
+# us-east-1f is cheapest in us-east-1 but has tighter H100 capacity than -1a.
+aws_region = "us-east-1"
+primary_az = "us-east-1f"
+
+# Your public IP for SSH access to the login node. Find yours with: curl ifconfig.me
+ssh_allowed_cidr = "203.0.113.5/32"
+
+# Who can reach the ALB (web UI) over the internet. Tighten for prod.
+alb_allowed_cidrs = ["0.0.0.0/0"]
+
+# ACM certificate ARN covering the hostname you'll point at the ALB.
+# Must be in the same region as the ALB (us-east-1 in this example).
+acm_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+# VPC CIDR. Pick a non-overlapping range per team if you deploy more than one.
+vpc_cidr = "10.20.0.0/16"
+
+# ----------------------------------------------------------------------------
+# GPU fleet — enable only the families you have AWS quota for.
+# Request quotas ahead of time:
+#   - "Running On-Demand G and VT instances" for t4/a10g/l4
+#   - "Running On-Demand P instances" for a100/h100
+# ----------------------------------------------------------------------------
+
+gpu_families_enabled = ["t4", "a10g", "l4", "h100-1x"]
+
+# Max concurrent nodes per GPU family. Must fit under your AWS quota.
+gpu_max_nodes = {
+  t4       = 10
+  a10g     = 20
+  l4       = 15
+  a100     = 2
+  h100-1x  = 4
+  h100-8x  = 1
+}
+
+# Additional AZs to try for H100 launches on InsufficientInstanceCapacity.
+# Leaving empty means fail-fast in primary_az only.
+# NOTE: Using AZs other than primary_az causes cross-AZ traffic to FSx.
+h100_fallback_azs = []
+
+# ----------------------------------------------------------------------------
+# Storage sizing
+# ----------------------------------------------------------------------------
+
+# FSx Lustre capacity. SCRATCH_2 throughput = 240 MB/s per 1200 GiB.
+# 2400 = 480 MB/s; 4800 = 960 MB/s. Bump for heavy concurrent H100 load.
+fsx_storage_capacity_gib = 2400
+
+# Non-prod: allow terraform destroy to delete S3 objects. Set false in prod.
+s3_bucket_force_destroy = true
+
+# ----------------------------------------------------------------------------
+# Database sizing
+# ----------------------------------------------------------------------------
+
+aurora_min_capacity_acu       = 0.5
+aurora_max_capacity_acu       = 4
+aurora_backup_retention_days  = 7
+
+# ----------------------------------------------------------------------------
+# Team members — seeded into jobui DB on first boot.
+# Admins can add more via the UI afterwards.
+# ----------------------------------------------------------------------------
+
+admin_email = "admin@example.com"
+
+team_members = [
+  {
+    username           = "alice"
+    email              = "alice@example.com"
+    display_name       = "Alice Example"
+    role               = "admin"
+    h100_approved      = true
+    monthly_budget_usd = 2000
+  },
+  {
+    username           = "bob"
+    email              = "bob@example.com"
+    display_name       = "Bob Example"
+    role               = "member"
+    h100_approved      = false
+    monthly_budget_usd = 500
+  },
+  {
+    username           = "carol"
+    email              = "carol@example.com"
+    display_name       = "Carol Example"
+    role               = "member"
+    h100_approved      = true
+    monthly_budget_usd = 1000
+  },
+]
+
+# ----------------------------------------------------------------------------
+# Node sizing — bump head_node if you'll run 50+ concurrent jobs
+# ----------------------------------------------------------------------------
+
+head_node_instance_type  = "t3.medium"
+login_node_instance_type = "t3.small"
+enable_login_node        = true
+
+# ----------------------------------------------------------------------------
+# jobui
+# ----------------------------------------------------------------------------
+
+jobui_image_tag  = "latest"
+jwt_expiry_hours = 8
+
+# ----------------------------------------------------------------------------
+# Cost guardrails — enforced via AWS Budgets (team-level) and app logic (user-level)
+# ----------------------------------------------------------------------------
+
+team_monthly_budget_usd         = 5000
+default_user_monthly_budget_usd = 500
