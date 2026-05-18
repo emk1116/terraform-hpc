@@ -86,7 +86,7 @@ def complete_upload(
     )
 
     try:
-        complete_multipart(upload.s3_key, upload.s3_upload_id, parts)
+        etag = complete_multipart(upload.s3_key, upload.s3_upload_id, parts)
     except Exception as e:
         upload.status = UploadStatus.failed
         db.commit()
@@ -94,6 +94,8 @@ def complete_upload(
 
     upload.status = UploadStatus.completed
     upload.completed_at = datetime.utcnow()
+    # Store the S3 multipart ETag for integrity tracking (MD5 of part MD5s)
+    upload.content_sha256 = etag.strip('"')[:64] if etag else None
     db.add(AuditLog(user_id=user.id, action="upload_complete", target_id=upload.id))
     db.commit()
     db.refresh(upload)

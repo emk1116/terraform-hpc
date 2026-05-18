@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -38,6 +38,7 @@ router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 @router.post("", response_model=JobSubmitResponse, status_code=201)
 def submit(
     req: JobSubmitRequest,
+    request: Request,
     user: Annotated[AppUser, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ):
@@ -119,12 +120,14 @@ def submit(
     job.slurm_job_id = slurm_id
     job.status = JobStatus.pending
 
+    client_ip = request.headers.get("X-Forwarded-For", request.client.host if request.client else None)
     db.add(
         AuditLog(
             user_id=user.id,
             action="submit_job",
             target_type="job",
             target_id=str(job.id),
+            ip_address=client_ip,
             details={
                 "slurm_job_id": slurm_id,
                 "gpu_family": req.gpu_family,
@@ -149,11 +152,21 @@ def list_jobs(
     db: Annotated[Session, Depends(get_db)],
     limit: int = 50,
 ):
-    stmt = select(Job).order_by(Job.submitted_at.desc()).limit(limit)
-    # Admins see all; members see only their own
+    stmt = (
+        select(Job, ModelRow.model_key, ModelRow.display_name)
+        .join(ModelRow, Job.model_id == ModelRow.id)
+        .order_by(Job.submitted_at.desc())
+        .limit(limit)
+    )
     if user.role != UserRole.admin:
         stmt = stmt.where(Job.user_id == user.id)
-    return list(db.execute(stmt).scalars())
+    rows = db.execute(stmt).all()
+    return [
+        JobOut.model_validate(job).model_copy(
+            update={"model_key": mk, "model_display_name": mdn}
+        )
+        for job, mk, mdn in rows
+    ]
 
 
 @router.get("/{job_id}", response_model=JobDetail)

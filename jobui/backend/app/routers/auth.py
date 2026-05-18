@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.auth import (
     create_access_token,
     get_current_user,
+    get_current_user_raw,
     hash_password,
     verify_password,
 )
@@ -54,7 +55,7 @@ def login(
 @router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
 def change_password(
     req: ChangePasswordRequest,
-    user: Annotated[AppUser, Depends(get_current_user)],
+    user: Annotated[AppUser, Depends(get_current_user_raw)],
     db: Annotated[Session, Depends(get_db)],
 ):
     if not verify_password(req.current_password, user.password_hash):
@@ -67,5 +68,5 @@ def change_password(
 
 
 @router.get("/me", response_model=UserOut)
-def me(user: Annotated[AppUser, Depends(get_current_user)]):
+def me(user: Annotated[AppUser, Depends(get_current_user_raw)]):
     return user

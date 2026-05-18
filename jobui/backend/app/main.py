@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
+from app.database import engine
 from app.routers import auth, gpus, jobs, models, uploads, users
 
 logging.basicConfig(
@@ -26,13 +28,17 @@ app = FastAPI(
     openapi_url="/api/openapi.json",
 )
 
-# CORS — ALB terminates TLS; we don't expect cross-origin, but allow for dev
+# CORS — JWT tokens travel in the Authorization header, not cookies, so
+# allow_credentials is not needed. Restrict origins in production by setting
+# CORS_ALLOWED_ORIGINS env var (comma-separated list).
+import os as _os
+_cors_origins = [o.strip() for o in _os.environ.get("CORS_ALLOWED_ORIGINS", "*").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_cors_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 # Routers
@@ -46,7 +52,32 @@ app.include_router(jobs.router)
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "team": get_settings().TEAM_NAME}
+    checks: dict[str, str] = {}
+
+    # Aurora
+    try:
+        with engine.connect() as conn:
+            conn.exec_driver_sql("SELECT 1")
+        checks["aurora"] = "ok"
+    except Exception as exc:
+        checks["aurora"] = f"error: {exc}"
+
+    # Slurm (scontrol ping)
+    try:
+        r = subprocess.run(
+            ["scontrol", "ping"],
+            capture_output=True, text=True, timeout=5,
+        )
+        checks["slurm"] = "ok" if r.returncode == 0 else f"error: {r.stderr.strip()}"
+    except Exception as exc:
+        checks["slurm"] = f"error: {exc}"
+
+    ok = all(v == "ok" for v in checks.values())
+    status_code = 200 if ok else 503
+    return JSONResponse(
+        status_code=status_code,
+        content={"status": "ok" if ok else "degraded", "team": get_settings().TEAM_NAME, "checks": checks},
+    )
 
 
 # ---------------------------------------------------------------------------

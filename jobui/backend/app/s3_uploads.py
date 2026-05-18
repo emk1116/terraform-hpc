@@ -96,11 +96,12 @@ def presign_get_url(key: str, ttl_seconds: int = 3600) -> str:
 
 def list_prefix(prefix: str) -> list[dict]:
     s = get_settings()
-    resp = _s3().list_objects_v2(Bucket=s.S3_BUCKET, Prefix=prefix)
-    return [
-        {"key": o["Key"], "size": o["Size"], "last_modified": o["LastModified"]}
-        for o in resp.get("Contents", [])
-    ]
+    paginator = _s3().get_paginator("list_objects_v2")
+    result = []
+    for page in paginator.paginate(Bucket=s.S3_BUCKET, Prefix=prefix):
+        for o in page.get("Contents", []):
+            result.append({"key": o["Key"], "size": o["Size"], "last_modified": o["LastModified"]})
+    return result
 
 
 def calc_num_parts(size_bytes: int) -> int:

@@ -94,7 +94,7 @@ resource "aws_secretsmanager_secret" "master" {
   name_prefix = "${var.name_prefix}-aurora-master-"
   description = "Aurora master password for ${var.name_prefix}"
   kms_key_id  = aws_kms_key.aurora.arn
-  recovery_window_in_days = 0  # Immediate delete for non-prod; raise to 7+ for prod
+  recovery_window_in_days = 7
 }
 
 resource "aws_secretsmanager_secret_version" "master" {
@@ -109,7 +109,7 @@ resource "aws_secretsmanager_secret" "slurm_user" {
   name_prefix             = "${var.name_prefix}-aurora-slurm-"
   description             = "MySQL user for slurmdbd"
   kms_key_id              = aws_kms_key.aurora.arn
-  recovery_window_in_days = 0
+  recovery_window_in_days = 7
 }
 
 resource "aws_secretsmanager_secret_version" "slurm_user" {
@@ -125,7 +125,7 @@ resource "aws_secretsmanager_secret" "jobui_rw" {
   name_prefix             = "${var.name_prefix}-aurora-jobui-"
   description             = "MySQL user for jobui app (read/write on jobui DB, read-only on slurm_acct_db)"
   kms_key_id              = aws_kms_key.aurora.arn
-  recovery_window_in_days = 0
+  recovery_window_in_days = 7
 }
 
 resource "aws_secretsmanager_secret_version" "jobui_rw" {

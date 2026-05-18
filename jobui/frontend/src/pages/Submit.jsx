@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, uploadFileMultipart } from "../api.js";
 import { useAuth } from "../auth.jsx";
@@ -14,17 +14,19 @@ export default function Submit() {
   const { user } = useAuth();
   const navigate = useNavigate();
 
-  // Step state
+  // Upload state
   const [file, setFile] = useState(null);
   const [uploadId, setUploadId] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [uploadErr, setUploadErr] = useState("");
+  const abortRef = useRef(null); // AbortController for in-progress upload
 
   // Catalogs
   const [gpus, setGpus] = useState([]);
   const [models, setModels] = useState([]);
   const [gpuFamily, setGpuFamily] = useState("");
+  const [gpuCount, setGpuCount] = useState(1);
   const [modelId, setModelId] = useState("");
   const [hours, setHours] = useState(4);
 
@@ -37,7 +39,6 @@ export default function Submit() {
     api.get("/api/gpus").then(setGpus).catch((e) => setSubmitErr(e.message));
   }, []);
 
-  // Models dropdown — refetch when GPU family changes so we only show compatible
   useEffect(() => {
     if (!gpuFamily) {
       api.get("/api/models").then(setModels);
@@ -45,16 +46,16 @@ export default function Submit() {
     }
     api.get("/api/models?gpu_family=" + encodeURIComponent(gpuFamily)).then(setModels);
     setModelId("");
+    setGpuCount(1);
   }, [gpuFamily]);
 
-  // Cost preview — refetch when gpu or hours change
   useEffect(() => {
     if (!gpuFamily || !hours) return setPreview(null);
     api
       .post("/api/gpus/cost-preview", { gpu_family: gpuFamily, hours })
       .then(setPreview)
       .catch(() => setPreview(null));
-  }, [gpuFamily, hours]);
+  }, [gpuFamily, hours, gpuCount]);
 
   const selectedModel = useMemo(
     () => models.find((m) => m.id === parseInt(modelId)),
@@ -65,20 +66,44 @@ export default function Submit() {
     [gpus, gpuFamily],
   );
 
+  // Valid gpu_count options for the selected family
+  const gpuCountOptions = useMemo(() => {
+    if (!selectedGpu) return [1];
+    const max = selectedGpu.gpus_per_node;
+    if (max <= 1) return [1];
+    // Powers of 2 up to max
+    const opts = [];
+    for (let n = 1; n <= max; n *= 2) opts.push(n);
+    return opts;
+  }, [selectedGpu]);
+
   async function doUpload(f) {
     setFile(f);
     setUploading(true);
     setUploadErr("");
     setUploadProgress(0);
     setUploadId(null);
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
-      const result = await uploadFileMultipart(f, (p) => setUploadProgress(p));
+      const result = await uploadFileMultipart(f, (p) => setUploadProgress(p), controller.signal);
       setUploadId(result.upload_id);
     } catch (e) {
-      setUploadErr(e.message);
+      if (e.name === "AbortError" || e.message === "Upload aborted") {
+        setUploadErr("Upload cancelled.");
+      } else {
+        setUploadErr(e.message);
+      }
       setFile(null);
     } finally {
       setUploading(false);
+      abortRef.current = null;
+    }
+  }
+
+  function abortUpload() {
+    if (abortRef.current) {
+      abortRef.current.abort();
     }
   }
 
@@ -91,7 +116,7 @@ export default function Submit() {
         upload_id: uploadId,
         model_id: parseInt(modelId),
         gpu_family: gpuFamily,
-        gpu_count: 1,
+        gpu_count: gpuCount,
         requested_hours: parseInt(hours),
       });
       navigate("/jobs/" + job.job_id);
@@ -147,9 +172,17 @@ export default function Submit() {
                   {!uploading && uploadId && (
                     <button
                       className="btn-ghost btn text-xs py-1"
-                      onClick={() => { setFile(null); setUploadId(null); }}
+                      onClick={() => { setFile(null); setUploadId(null); setUploadErr(""); }}
                     >
                       change
+                    </button>
+                  )}
+                  {uploading && (
+                    <button
+                      className="btn text-xs py-1 border border-red-300 text-red-600 hover:bg-red-50"
+                      onClick={abortUpload}
+                    >
+                      cancel
                     </button>
                   )}
                 </div>
@@ -201,12 +234,38 @@ export default function Submit() {
                 >
                   <div className="mono font-bold">{g.display_name}</div>
                   <div className="text-xs opacity-75 mt-1">{g.instance_type}</div>
-                  <div className="text-xs mono mt-2">
-                    ${g.hourly_cost_usd.toFixed(2)}/hr
+                  <div className="text-xs mono mt-2 flex gap-3">
+                    <span>${g.hourly_cost_usd.toFixed(2)}/hr</span>
+                    <span className="opacity-60">{g.gpus_per_node} GPU{g.gpus_per_node > 1 ? "s" : ""}/node · {g.gpu_memory_gb} GB</span>
                   </div>
                 </button>
               ))}
             </div>
+
+            {/* GPU count — only shown for multi-GPU families */}
+            {selectedGpu && selectedGpu.gpus_per_node > 1 && (
+              <div className="mt-4">
+                <div className="text-xs mono text-muted mb-2">gpu count</div>
+                <div className="flex gap-2">
+                  {gpuCountOptions.map((n) => (
+                    <button
+                      key={n}
+                      onClick={() => setGpuCount(n)}
+                      className={
+                        "px-3 py-1 border mono text-sm transition " +
+                        (gpuCount === n ? "border-ink bg-ink text-paper" : "border-border hover:border-ink")
+                      }
+                    >
+                      {n}×
+                    </button>
+                  ))}
+                </div>
+                <div className="text-xs text-muted mt-1">
+                  {gpuCount} × ${selectedGpu.hourly_cost_usd.toFixed(2)}/hr
+                  {gpuCount > 1 && ` = $${(gpuCount * selectedGpu.hourly_cost_usd).toFixed(2)}/hr`}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Step 3 — Model */}
@@ -232,7 +291,7 @@ export default function Submit() {
                 <option value="">— select a model —</option>
                 {models.map((m) => (
                   <option key={m.id} value={m.id}>
-                    {m.display_name} ({m.gpu_min_memory_gb} GB min)
+                    {m.display_name} (min {m.gpu_min_memory_gb} GB GPU)
                   </option>
                 ))}
               </select>
@@ -285,7 +344,7 @@ export default function Submit() {
               <div className="flex justify-between">
                 <dt className="text-muted">gpu</dt>
                 <dd className="mono text-xs">
-                  {selectedGpu?.display_name || "—"}
+                  {selectedGpu ? `${gpuCount}× ${selectedGpu.display_name}` : "—"}
                 </dd>
               </div>
               <div className="flex justify-between">
@@ -306,12 +365,12 @@ export default function Submit() {
               <div className="space-y-2">
                 <div className="flex justify-between text-sm">
                   <span className="text-muted">hourly</span>
-                  <span className="mono">${preview.hourly_rate_usd.toFixed(2)}</span>
+                  <span className="mono">${(preview.hourly_rate_usd * gpuCount).toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="font-bold">est. cost</span>
                   <span className="mono font-bold text-lg">
-                    ${Number(preview.estimated_cost_usd).toFixed(2)}
+                    ${(Number(preview.estimated_cost_usd) * gpuCount).toFixed(2)}
                   </span>
                 </div>
                 <div className="flex justify-between text-xs">

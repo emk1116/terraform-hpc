@@ -181,7 +181,7 @@ locals {
     "ec2messages",      # SSM Session Manager
     "secretsmanager",
     "logs",
-    "elasticache",
+    # elasticache Serverless has no VPC interface endpoint; it uses standard VPC routing
   ]
 }
 

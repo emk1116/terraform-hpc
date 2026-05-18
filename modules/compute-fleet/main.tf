@@ -9,7 +9,6 @@ variable "security_group_ids" { type = list(string) }
 variable "subnet_id" { type = string }
 variable "fsx_dns_name" { type = string }
 variable "fsx_mount_name" { type = string }
-variable "head_node_ip" { type = string }
 variable "ecr_registry_url" { type = string }
 variable "s3_bucket_name" { type = string }
 

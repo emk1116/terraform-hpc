@@ -24,7 +24,7 @@ SelectTypeParameters=CR_CPU_Memory
 # GRES — GPUs. AutoDetect=nvml lives in gres.conf on each compute node.
 # ----------------------------------------------------------------------------
 GresTypes=gpu
-AccountingStorageTRES=gres/gpu,gres/gpu:t4,gres/gpu:a10g,gres/gpu:l4,gres/gpu:a100,gres/gpu:h100
+AccountingStorageTRES=${gres_tres}
 
 # ----------------------------------------------------------------------------
 # Accounting via slurmdbd → Aurora MySQL
@@ -53,9 +53,11 @@ PriorityFavorSmall=NO
 # ----------------------------------------------------------------------------
 SuspendProgram=/opt/titan-hpc/bin/suspend-node.sh
 ResumeProgram=/opt/titan-hpc/bin/resume-node.sh
+# Global fallback values — per-partition overrides in the Partitions section below
+# take precedence for all defined GPU families.
 SuspendTimeout=180
-ResumeTimeout=1200
-SuspendTime=120
+ResumeTimeout=1800
+SuspendTime=300
 SuspendExcNodes=
 ResumeRate=0
 SuspendRate=0

@@ -32,17 +32,17 @@ JOB_SCRIPT_TEMPLATE = dedent("""\
     #SBATCH --job-name={job_name}
     #SBATCH --partition={partition}
     #SBATCH --account={slurm_account}
-    #SBATCH --gres=gpu:{gpu_count}
+    #SBATCH --gres=gpu:{gpu_family}:{gpu_count}
     #SBATCH --cpus-per-task={cpus}
     #SBATCH --mem={memory_mb}M
     #SBATCH --time={hours}:00:00
-    #SBATCH --output=/fsx/work/%u/%j/slurm.log
-    #SBATCH --error=/fsx/work/%u/%j/slurm.err
+    #SBATCH --output=/fsx/work/{username}/%j/slurm.log
+    #SBATCH --error=/fsx/work/{username}/%j/slurm.err
     #SBATCH --export=ALL,HPC_BUCKET,ECR_REGISTRY,AWS_REGION,AWS_DEFAULT_REGION
 
     set -euo pipefail
 
-    WORK=/fsx/work/$USER/$SLURM_JOB_ID
+    WORK=/fsx/work/{username}/$SLURM_JOB_ID
     mkdir -p "$WORK/input" "$WORK/output"
     cd "$WORK"
 
@@ -77,13 +77,24 @@ JOB_SCRIPT_TEMPLATE = dedent("""\
 
     # --- Upload results to S3 ---
     echo "[$(date)] uploading results"
+    _upload_ok=false
     for attempt in 1 2 3; do
         if s5cmd cp output/ "s3://{s3_bucket}/results/$SLURM_JOB_ID/"; then
+            _upload_ok=true
             break
         fi
         echo "[$(date)] upload attempt $attempt failed, retrying in 5s..."
         sleep 5
     done
+
+    # --- Archive log before cleanup (regardless of upload outcome) ---
+    s5cmd cp slurm.log "s3://{s3_bucket}/logs/{username}/$SLURM_JOB_ID/slurm.log" || true
+    s5cmd cp slurm.err "s3://{s3_bucket}/logs/{username}/$SLURM_JOB_ID/slurm.err" || true
+
+    if [[ "$_upload_ok" != "true" ]]; then
+        echo "[$(date)] ERROR: result upload failed after 3 attempts; scratch NOT deleted"
+        exit 1
+    fi
 
     # --- Cleanup FSx scratch ---
     cd /
@@ -115,10 +126,12 @@ def render_job_script(
         job_name=f"{username}-{model.model_key}"[:60],
         partition=spec["partition"],
         slurm_account=job.slurm_account,
+        gpu_family=job.gpu_family,
         gpu_count=job.gpu_count,
         cpus=spec["cpus_per_node"] // max(spec["gpus_per_node"], 1),
         memory_mb=int(spec["memory_mb"] * 0.9),  # leave headroom
         hours=job.requested_hours,
+        username=username,
         s3_bucket=s.S3_BUCKET,
         input_key=upload.s3_key,
         ecr_registry=s.ECR_REGISTRY,
@@ -229,11 +242,23 @@ def get_job_status(job_id: int) -> dict | None:
 
 
 def read_job_log(job_id: int, username: str, tail_lines: int = 500) -> str:
-    """Read Slurm log from /fsx/work/<user>/<job>/slurm.log"""
+    """Read Slurm log from FSx scratch (live jobs) or S3 archive (completed jobs)."""
     log_path = Path(f"/fsx/work/{username}/{job_id}/slurm.log")
-    if not log_path.exists():
+    if log_path.exists():
+        with log_path.open("r", errors="replace") as f:
+            lines = f.readlines()
+        return "".join(lines[-tail_lines:])
+
+    # Scratch was cleaned up — try S3 archive written by the job epilog
+    try:
+        import boto3
+        s = get_settings()
+        obj = boto3.client("s3", region_name=s.AWS_REGION).get_object(
+            Bucket=s.S3_BUCKET,
+            Key=f"logs/{username}/{job_id}/slurm.log",
+        )
+        content = obj["Body"].read().decode("utf-8", errors="replace")
+        lines = content.splitlines(keepends=True)
+        return "".join(lines[-tail_lines:])
+    except Exception:
         return ""
-    # Simple tail implementation
-    with log_path.open("r", errors="replace") as f:
-        lines = f.readlines()
-    return "".join(lines[-tail_lines:])

@@ -83,7 +83,7 @@ resource "random_password" "jwt_secret" {
 
 resource "aws_secretsmanager_secret" "jwt" {
   name_prefix             = "${var.name_prefix}-jobui-jwt-"
-  recovery_window_in_days = 0
+  recovery_window_in_days = 7
 }
 
 resource "aws_secretsmanager_secret_version" "jwt" {
@@ -100,7 +100,7 @@ resource "random_password" "admin_temp" {
 
 resource "aws_secretsmanager_secret" "admin_temp" {
   name_prefix             = "${var.name_prefix}-admin-temp-"
-  recovery_window_in_days = 0
+  recovery_window_in_days = 7
 }
 
 resource "aws_secretsmanager_secret_version" "admin_temp" {
@@ -114,15 +114,18 @@ resource "aws_secretsmanager_secret_version" "admin_temp" {
 # ----------------------------------------------------------------------------
 
 locals {
-  # Generate Slurm partition and node lines from gpu_family_spec
+  # Generate Slurm partition lines — one per GPU family.
+  # SuspendTime and ResumeTimeout are set per-partition so h100-8x nodes
+  # are not terminated after the global 120s default.
   slurm_partitions = join("\n", [
     for family, spec in var.gpu_family_spec :
     format(
-      "PartitionName=%s Nodes=%s-[1-%d] MaxTime=24:00:00 State=UP%s",
+      "PartitionName=%s Nodes=%s-[1-%d] MaxTime=24:00:00 State=UP SuspendTime=%d ResumeTimeout=%d%s",
       spec.partition,
       family,
       lookup(var.gpu_max_nodes, family, 2),
-      # H100 partitions are account-gated
+      spec.suspend_time_s,
+      spec.resume_timeout_s,
       startswith(family, "h100") ? " AllowAccounts=h100-approved" : ""
     )
   ])
@@ -140,20 +143,19 @@ locals {
     )
   ])
 
-  # Per-family SuspendTime / ResumeTimeout — NodeGroup-level config in slurm.conf
-  slurm_node_features = join("\n", [
-    for family, spec in var.gpu_family_spec :
-    format(
-      "# %s: SuspendTime=%d ResumeTimeout=%d",
-      family, spec.suspend_time_s, spec.resume_timeout_s
-    )
-  ])
+  # Build AccountingStorageTRES from the actual GPU family names so they match
+  # the NodeName Gres= definitions (e.g. "gpu:h100-1x", not "gpu:h100").
+  gres_tres = join(",", concat(
+    ["gres/gpu"],
+    [for family, _ in var.gpu_family_spec : "gres/gpu:${family}"]
+  ))
 
   slurm_conf = templatefile("${path.module}/templates/slurm.conf.tpl", {
     cluster_name      = "titan-${var.team_name}"
     control_machine   = "head"
     slurm_partitions  = local.slurm_partitions
     slurm_nodes       = local.slurm_nodes
+    gres_tres         = local.gres_tres
     aurora_endpoint   = var.aurora_writer_endpoint
   })
 

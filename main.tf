@@ -307,7 +307,6 @@ module "compute_fleet" {
 
   fsx_dns_name     = module.fsx.dns_name
   fsx_mount_name   = module.fsx.mount_name
-  head_node_ip     = module.head_node.private_ip
   ecr_registry_url = module.ecr.registry_url
   s3_bucket_name   = module.s3.bucket_name
 }
@@ -325,7 +324,7 @@ resource "aws_budgets_budget" "team_monthly" {
 
   cost_filter {
     name   = "TagKeyValue"
-    values = ["user:Team$${var.team_name}"]
+    values = ["user:Team${var.team_name}"]
   }
 
   notification {

@@ -457,4 +457,30 @@ docker exec jobui-backend python -m app.scripts.monthly_rollup 2>&1 | \
 EOF
 chmod +x /etc/cron.hourly/titan-spend-rollup
 
+# ----------------------------------------------------------------------------
+# 13. Scratch cleanup cron — remove stale FSx work dirs from killed/timed-out
+#     jobs that never had a chance to run their own rm -rf cleanup.
+#     Runs daily; skips any directory whose job_id is still active in Slurm.
+# ----------------------------------------------------------------------------
+cat > /etc/cron.daily/titan-scratch-cleanup <<'CLEANEOF'
+#!/bin/bash
+set -euo pipefail
+SLURM_BIN=/opt/slurm/bin
+FSX_WORK=/fsx/work
+
+# Walk /fsx/work/<user>/<job_id>/ — depth 2, directories only, older than 7 days
+find "$FSX_WORK" -mindepth 2 -maxdepth 2 -type d -mtime +7 2>/dev/null | while read -r dir; do
+    job_id=$(basename "$dir")
+    # Only process numeric job IDs (skip sbatch script dirs)
+    [[ "$job_id" =~ ^[0-9]+$ ]] || continue
+    # Skip if job is still listed in squeue (PENDING or RUNNING)
+    if "$SLURM_BIN/squeue" -j "$job_id" -h -o "%i" 2>/dev/null | grep -q "^${job_id}$"; then
+        continue
+    fi
+    echo "[$(date -Iseconds)] titan-scratch-cleanup: removing $dir"
+    rm -rf "$dir"
+done
+CLEANEOF
+chmod +x /etc/cron.daily/titan-scratch-cleanup
+
 echo "[$(date)] titan-hpc head node bootstrap complete"

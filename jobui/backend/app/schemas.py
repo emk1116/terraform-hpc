@@ -186,6 +186,8 @@ class JobOut(BaseModel):
     slurm_job_id: int | None
     user_id: int
     model_id: int
+    model_key: str | None = None
+    model_display_name: str | None = None
     gpu_family: str
     gpu_count: int
     partition: str
@@ -200,6 +202,7 @@ class JobOut(BaseModel):
 
     class Config:
         from_attributes = True
+        populate_by_name = True
 
 
 class JobDetail(JobOut):

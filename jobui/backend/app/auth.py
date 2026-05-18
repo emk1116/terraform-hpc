@@ -39,10 +39,14 @@ def create_access_token(user_id: int, username: str, role: UserRole) -> str:
     return jwt.encode(payload, get_jwt_secret(), algorithm=s.JWT_ALGORITHM)
 
 
-async def get_current_user(
+async def get_current_user_raw(
     token: Annotated[str, Depends(oauth2_scheme)],
     db: Annotated[Session, Depends(get_db)],
 ) -> AppUser:
+    """Decode token and return user without enforcing must_change_password.
+    Use only for auth endpoints (login, change-password, me) where the user
+    needs access regardless of password state.
+    """
     credentials_exc = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -58,6 +62,21 @@ async def get_current_user(
     user = db.get(AppUser, user_id)
     if user is None or not user.is_active:
         raise credentials_exc
+    return user
+
+
+async def get_current_user(
+    user: Annotated[AppUser, Depends(get_current_user_raw)],
+) -> AppUser:
+    """Standard dependency for all non-auth endpoints.
+    Blocks access until the user changes their temporary password.
+    """
+    if user.must_change_password:
+        raise HTTPException(
+            status_code=403,
+            detail="Password change required before using this endpoint.",
+            headers={"X-Must-Change-Password": "true"},
+        )
     return user
 
 
