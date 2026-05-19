@@ -1,9 +1,10 @@
 # ============================================================================
 # Titan HPC — workflow node
 #
-# Small EC2 instance dedicated to running workflow engines (Snakemake,
-# Nextflow, Cromwell) that submit jobs into Slurm. Kept separate from the
-# head node so that long-running workflow daemons can't starve slurmctld.
+# Small EC2 instance dedicated to running Snakemake DAGs that submit jobs
+# into Slurm. Kept separate from the login node so that long-running
+# workflow daemons don't fight interactive shells for resources.
+# (Nextflow / Cromwell can be added here later if the team needs them.)
 #
 # Cost: t3.small at $0.021/hr ≈ $15/month. Set enable_workflow_node=false in
 # tfvars if you'd rather run Snakemake on the login node and save this cost.

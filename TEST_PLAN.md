@@ -5,7 +5,7 @@ autoscaling, and Snakemake fan-out — while spending **< $15** of the $100
 credit per full deploy → test → destroy cycle.
 
 The stack is **pure HPC** (no web UI). Users SSM into the login node and
-run `sbatch` / `snakemake` / `nextflow` directly. The optional jobui in
+run `sbatch` / `snakemake` directly. The optional jobui in
 `jobui/` is out of scope here — it will ship later as a Fargate service.
 
 ---

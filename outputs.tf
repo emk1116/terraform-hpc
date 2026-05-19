@@ -24,7 +24,7 @@ output "head_node_ssm_command" {
 }
 
 output "workflow_node_instance_id" {
-  description = "Workflow node EC2 instance ID (Snakemake / Nextflow runner)."
+  description = "Workflow node EC2 instance ID (Snakemake runner)."
   value       = module.workflow_node.instance_id
 }
 

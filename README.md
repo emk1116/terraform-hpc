@@ -2,8 +2,8 @@
 
 Production-grade HPC cluster on AWS for **team-scale GPU inference and workflow
 execution**. Pure Slurm + FSx + autoscaled GPUs. Users `aws ssm start-session`
-into the **login node** and submit jobs with `sbatch`, `snakemake`, or
-`nextflow`. The cluster has **no user-facing web service**: it's HPC
+into the **login node** and submit jobs with `sbatch` or `snakemake`. The
+cluster has **no user-facing web service**: it's HPC
 infrastructure, not a SaaS.
 
 A web UI for users who prefer point-and-click access lives in [`jobui/`](jobui/);
@@ -26,7 +26,7 @@ Enhanced fork of [`emk1116/terraform-hpc`](https://github.com/emk1116/terraform-
                           │   │   • Slurm client: sbatch, squeue, sacct │    │
                           │   │   • FSx mounted at /fsx                 │    │
                           │   │   • munge — auth to slurmctld           │    │
-                          │   │   • Snakemake / Nextflow (preinstalled) │    │
+                          │   │   • Snakemake (preinstalled)            │    │
                           │   └────────────────┬────────────────────────┘    │
                           │                    │ sbatch over :6817           │
                           │   ┌────────────────▼────────────────────────┐    │
@@ -49,7 +49,7 @@ Enhanced fork of [`emk1116/terraform-hpc`](https://github.com/emk1116/terraform-
                           │                                                  │
                           │   ┌─────────────────────────────────────────┐    │
                           │   │  WORKFLOW NODE  (always deployed)       │    │
-                          │   │   • Snakemake / Nextflow runner         │    │
+                          │   │   • Snakemake runner                    │    │
                           │   │   • sbatch over :6817                   │    │
                           │   └─────────────────────────────────────────┘    │
                           └──────────────────────────────────────────────────┘
@@ -66,7 +66,7 @@ Enhanced fork of [`emk1116/terraform-hpc`](https://github.com/emk1116/terraform-
 
 | Path | Who it's for | How |
 |---|---|---|
-| **CLI** (primary, always available) | All users, scripts, CI | `aws ssm start-session --target <login-node>`, then `sbatch`, `snakemake`, `nextflow`. No UI required. |
+| **CLI** (primary, always available) | All users, scripts, CI | `aws ssm start-session --target <login-node>`, then `sbatch` or `snakemake`. No UI required. |
 | **Web UI** (future, separate deployment) | Researchers who prefer point-and-click | Fargate-deployed jobui (out of scope here) talks to the login node. The UI deployment is **not built by this repo's `terraform apply`** in the new design. |
 
 The HPC cluster works identically whether or not the UI is deployed. There is
@@ -90,7 +90,7 @@ no fallback path inside the HPC stack that requires a UI; everything is
 ## Components
 
 - **Network** — VPC with public subnets (NAT + login node) and private subnets (head node, workflow node, Aurora, Valkey, compute, FSx). Default deployment AZ is **us-east-1f**.
-- **Login node** — User's entry point. AL2023 in a public subnet, EIP attached. SSM Session Manager + SSH. FSx mounted at `/fsx`. **Slurm client + Snakemake + Nextflow all preinstalled** so users can run `sbatch`, `snakemake --profile slurm`, or `nextflow run ... -profile slurm` directly. The future Fargate UI also submits through this node.
+- **Login node** — User's entry point. AL2023 in a public subnet, EIP attached. SSM Session Manager + SSH. FSx mounted at `/fsx`. **Slurm client + Snakemake preinstalled** so users can run `sbatch` or `snakemake --profile slurm` directly. The future Fargate UI also submits through this node. (Nextflow / Cromwell can be added later if the team needs them.)
 - **Head node** — Slurm control plane only. Runs `slurmctld` + `slurmdbd`. **No web server, no UI.** Reachable only via SSM by admins. Uploads `slurm.conf` and Slurm client binaries to S3 so other nodes can fetch them.
 - **Workflow node** — t3.small with the same Snakemake + Slurm executor plugin preinstalled. Required component; provides isolated process space for long-running DAG daemons so they don't fight interactive use on the login node. Both nodes can submit DAGs — pick the workflow node for production runs and the login node for quick interactive iteration.
 - **Aurora Serverless v2** — holds `slurm_acct_db` (slurmdbd accounting). When the future Fargate UI lands it also gets a `jobui` database; that's not in scope for this repo.
@@ -119,7 +119,7 @@ sacct -X --format=JobID,Partition,State,Elapsed,ReqTRES -S today
 aws s3 ls "s3://$(terraform output -raw s3_data_bucket)/results/"
 ```
 
-### Snakemake / Nextflow
+### Snakemake
 
 ```bash
 # On the login node (or workflow node):
@@ -240,7 +240,7 @@ the UI is up. (Variable doesn't exist yet; see Roadmap.)
 │   ├── alb/                         # vestigial — to be moved out with the UI work
 │   ├── head-node/                   # slurmctld + slurmdbd (control plane)
 │   ├── login-node/                  # SSH/SSM entry + Slurm client + FSx
-│   ├── workflow-node/               # Snakemake / Nextflow runner (required)
+│   ├── workflow-node/               # Snakemake runner (required)
 │   └── compute-fleet/               # GPU launch templates per family
 ├── jobui/                           # FUTURE — Fargate-deployed UI (not in HPC stack)
 │   ├── backend/                     # FastAPI + SQLAlchemy + Alembic

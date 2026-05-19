@@ -3,7 +3,7 @@
 # Root module. Invoke once per team.
 #
 # Pure HPC: Slurm + autoscaled GPU compute + FSx + S3.
-# Users SSM into the login node and run sbatch / snakemake / nextflow directly.
+# Users SSM into the login node and run sbatch or snakemake directly.
 # The optional web UI is a separate concern (future Fargate deployment) and is
 # not built by this terraform apply.
 # ============================================================================
@@ -258,7 +258,7 @@ module "login_node" {
 }
 
 # ----------------------------------------------------------------------------
-# Workflow node — Snakemake / Nextflow runner. Required component; sits
+# Workflow node — Snakemake runner. Required component; sits
 # alongside the login node and submits DAG jobs into the cluster.
 # ----------------------------------------------------------------------------
 
