@@ -1,0 +1,23 @@
+# Snakemake v8+ profile for Slurm submission via the slurm executor plugin.
+# Install: pip install snakemake snakemake-executor-plugin-slurm
+#
+# Usage from the head or login node:
+#   snakemake --profile examples/snakemake-demo/slurm --jobs 5
+
+executor: slurm
+jobs: 5                          # max concurrent Slurm jobs in flight
+latency-wait: 60                 # FSx can lag a few seconds
+keep-going: True
+rerun-incomplete: True
+printshellcmds: True
+restart-times: 1
+max-jobs-per-second: 1
+max-status-checks-per-second: 5
+
+# Per-rule resources can also be set in the Snakefile (preferred).
+default-resources:
+  slurm_partition: gpu-t4
+  slurm_account: general
+  runtime: 15
+  mem_mb: 4000
+  cpus_per_task: 2

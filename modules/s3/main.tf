@@ -46,7 +46,7 @@ resource "aws_s3_bucket_cors_configuration" "data" {
 
   cors_rule {
     allowed_methods = ["GET", "PUT", "POST", "HEAD"]
-    allowed_origins = ["*"]  # TODO: tighten to ALB hostname in prod
+    allowed_origins = ["*"] # TODO: tighten to ALB hostname in prod
     allowed_headers = ["*"]
     expose_headers  = ["ETag", "x-amz-server-side-encryption"]
     max_age_seconds = 3000

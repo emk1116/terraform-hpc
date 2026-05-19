@@ -1,0 +1,31 @@
+# =============================================================================
+# Local UI for Titan HPC — runs the React SPA in podman and reverse-proxies
+# /api to the head node via an SSM port-forwarding tunnel.
+#
+# Usage:
+#   1. terraform apply, then capture: terraform output ssm_port_forward_command
+#   2. In a terminal, start the tunnel (leave it running):
+#        $(terraform output -raw ssm_port_forward_command)
+#      This exposes the head node's port 80 as localhost:8080.
+#   3. In another terminal, start the UI:
+#        podman-compose -f local-ui/podman-compose.yml up --build
+#   4. Open http://localhost:3000
+#
+# The nginx config forwards /api/* to host.containers.internal:8080 (the SSM
+# tunnel), so the browser sees a same-origin app and no CORS issues arise.
+# =============================================================================
+
+services:
+  ui:
+    build:
+      context: ../jobui/frontend
+    image: titan-hpc-ui:local
+    container_name: titan-ui
+    ports:
+      - "3000:80"
+    volumes:
+      - ./nginx-local.conf:/etc/nginx/conf.d/default.conf:ro
+    # Linux podman: host.containers.internal needs this flag in some setups
+    extra_hosts:
+      - "host.containers.internal:host-gateway"
+    restart: unless-stopped

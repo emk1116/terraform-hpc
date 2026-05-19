@@ -100,7 +100,7 @@ launch_node() {
             continue
         else
             log "ERROR launching $node: $output"
-            scontrol update NodeName="$node" State=DOWN Reason="launch failed: ${output:0:200}"
+            scontrol update NodeName="$node" State=DOWN Reason="launch failed: $${output:0:200}"
             return 1
         fi
     done

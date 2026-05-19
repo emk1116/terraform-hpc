@@ -5,6 +5,11 @@ variable "aws_region" { type = string }
 variable "h100_fallback_azs" { type = list(string) }
 variable "ssh_allowed_cidr" { type = string }
 variable "alb_allowed_cidrs" { type = list(string) }
+variable "head_node_http_cidrs" {
+  description = "CIDRs allowed to reach the head node's HTTP port directly (for ALB-less local-UI mode). Empty = no direct ingress; SSM port-forwarding still works."
+  type        = list(string)
+  default     = []
+}
 
 # All AZs we might ever land a compute node in
 locals {
@@ -173,12 +178,12 @@ resource "aws_security_group" "vpce" {
 
 locals {
   interface_endpoints = [
-    "ec2",              # run-instances, terminate-instances for ResumeProgram
+    "ec2", # run-instances, terminate-instances for ResumeProgram
     "ecr.api",
     "ecr.dkr",
     "ssm",
     "ssmmessages",
-    "ec2messages",      # SSM Session Manager
+    "ec2messages", # SSM Session Manager
     "secretsmanager",
     "logs",
     # elasticache Serverless has no VPC interface endpoint; it uses standard VPC routing
@@ -272,6 +277,17 @@ resource "aws_security_group" "head_node" {
     to_port         = 80
     protocol        = "tcp"
     security_groups = [aws_security_group.alb.id]
+  }
+
+  dynamic "ingress" {
+    for_each = length(var.head_node_http_cidrs) > 0 ? [1] : []
+    content {
+      description = "HTTP direct from operator CIDRs (ALB-less mode)"
+      from_port   = 80
+      to_port     = 80
+      protocol    = "tcp"
+      cidr_blocks = var.head_node_http_cidrs
+    }
   }
 
   ingress {

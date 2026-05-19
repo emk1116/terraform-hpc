@@ -10,12 +10,12 @@ variable "s3_bucket_name" { type = string }
 # ----------------------------------------------------------------------------
 
 resource "aws_fsx_lustre_file_system" "main" {
-  storage_capacity            = var.storage_capacity_gib
-  subnet_ids                  = [var.subnet_id]
-  security_group_ids          = var.security_group_ids
-  deployment_type             = "SCRATCH_2"
-  file_system_type_version    = "2.15"
-  storage_type                = "SSD"
+  storage_capacity         = var.storage_capacity_gib
+  subnet_ids               = [var.subnet_id]
+  security_group_ids       = var.security_group_ids
+  deployment_type          = "SCRATCH_2"
+  file_system_type_version = "2.15"
+  storage_type             = "SSD"
 
   tags = { Name = "${var.name_prefix}-fsx" }
 

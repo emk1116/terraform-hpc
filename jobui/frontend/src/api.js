@@ -54,7 +54,9 @@ export const api = {
 //
 // Uploads a file directly to S3 using presigned URLs from our backend.
 // onProgress receives fractions 0..1.
-export async function uploadFileMultipart(file, onProgress) {
+// signal: optional AbortSignal — when aborted, the upload stops and the
+// server-side multipart upload is also aborted.
+export async function uploadFileMultipart(file, onProgress, signal) {
   // 1. Init
   const init = await api.post("/api/uploads/init", {
     filename: file.name,
@@ -63,6 +65,23 @@ export async function uploadFileMultipart(file, onProgress) {
 
   const { upload_id, part_urls, part_size_bytes } = init;
 
+  const aborted = () => signal && signal.aborted;
+  const throwIfAborted = () => {
+    if (aborted()) {
+      const e = new Error("Upload aborted");
+      e.name = "AbortError";
+      throw e;
+    }
+  };
+
+  async function safeAbortServerSide() {
+    try {
+      await api.post(`/api/uploads/${upload_id}/abort`);
+    } catch {
+      // best-effort
+    }
+  }
+
   // 2. Upload parts in parallel (limit concurrency to 8)
   const completedParts = new Array(part_urls.length);
   let done = 0;
@@ -70,12 +89,13 @@ export async function uploadFileMultipart(file, onProgress) {
   let cursor = 0;
 
   async function uploadOne(index) {
+    throwIfAborted();
     const { part_number, url } = part_urls[index];
     const start = (part_number - 1) * part_size_bytes;
     const end = Math.min(start + part_size_bytes, file.size);
     const blob = file.slice(start, end);
 
-    const res = await fetch(url, { method: "PUT", body: blob });
+    const res = await fetch(url, { method: "PUT", body: blob, signal });
     if (!res.ok) throw new Error(`part ${part_number} failed: ${res.status}`);
     const etag = res.headers.get("ETag");
     if (!etag) throw new Error(`part ${part_number} returned no ETag`);
@@ -87,12 +107,21 @@ export async function uploadFileMultipart(file, onProgress) {
 
   async function worker() {
     while (cursor < part_urls.length) {
+      if (aborted()) return;
       const i = cursor++;
       await uploadOne(i);
     }
   }
 
-  await Promise.all(Array.from({ length: concurrency }, worker));
+  try {
+    await Promise.all(Array.from({ length: concurrency }, worker));
+    throwIfAborted();
+  } catch (e) {
+    if (e.name === "AbortError" || aborted()) {
+      await safeAbortServerSide();
+    }
+    throw e;
+  }
 
   // 3. Complete
   await api.post(`/api/uploads/${upload_id}/complete`, {

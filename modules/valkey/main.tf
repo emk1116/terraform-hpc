@@ -44,7 +44,7 @@ resource "aws_elasticache_serverless_cache" "valkey" {
 
   cache_usage_limits {
     data_storage {
-      maximum = 2  # GB
+      maximum = 2 # GB
       unit    = "GB"
     }
     ecpu_per_second {

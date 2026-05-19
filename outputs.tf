@@ -1,11 +1,16 @@
 output "jobui_url" {
-  description = "URL for the web UI. Point your browser here to log in."
-  value       = module.alb.https_url
+  description = "URL for the web UI when ALB is enabled. Empty when running ALB-less + local podman UI."
+  value       = var.enable_alb ? module.alb[0].https_url : ""
 }
 
 output "alb_dns_name" {
-  description = "ALB DNS name. Create your CNAME/Alias against this."
-  value       = module.alb.dns_name
+  description = "ALB DNS name when enabled."
+  value       = var.enable_alb ? module.alb[0].dns_name : ""
+}
+
+output "ssm_port_forward_command" {
+  description = "When ALB is disabled, run this on your laptop to expose the head node API at localhost:8080, then start the local podman UI."
+  value       = var.enable_alb ? "" : "aws ssm start-session --region ${var.aws_region} --target ${module.head_node.instance_id} --document-name AWS-StartPortForwardingSession --parameters portNumber=80,localPortNumber=8080"
 }
 
 output "login_node_public_ip" {
@@ -16,6 +21,16 @@ output "login_node_public_ip" {
 output "head_node_instance_id" {
   description = "Head node EC2 instance ID. Use with 'aws ssm start-session --target <id>' for shell access."
   value       = module.head_node.instance_id
+}
+
+output "workflow_node_instance_id" {
+  description = "Workflow node EC2 instance ID (Snakemake/Nextflow runner). Empty when disabled."
+  value       = var.enable_workflow_node ? module.workflow_node[0].instance_id : ""
+}
+
+output "workflow_node_ssm_command" {
+  description = "Open a shell on the workflow node via SSM."
+  value       = var.enable_workflow_node ? "aws ssm start-session --region ${var.aws_region} --target ${module.workflow_node[0].instance_id}" : ""
 }
 
 output "aurora_writer_endpoint" {
@@ -45,25 +60,20 @@ output "aurora_master_secret_arn" {
   sensitive   = true
 }
 
-output "admin_bootstrap_command" {
-  description = "Command to run on the head node (via SSM) to set the initial admin password."
-  value       = <<-EOT
-    # On head node:
-    sudo docker exec jobui-backend python -m app.scripts.bootstrap_admin \
-      --email ${var.admin_email} \
-      --generate-password
-  EOT
+output "admin_temp_password_command" {
+  description = "Command to retrieve the auto-generated admin temp password from Secrets Manager."
+  value       = "aws secretsmanager get-secret-value --region ${var.aws_region} --secret-id ${module.head_node.admin_temp_password_secret_arn} --query SecretString --output text"
 }
 
 output "team_config_summary" {
   description = "Summary of what was deployed."
   value = {
-    team           = var.team_name
-    env            = var.env
-    region         = var.aws_region
-    primary_az     = var.primary_az
-    gpu_families   = var.gpu_families_enabled
-    member_count   = length(var.team_members)
-    team_budget    = var.team_monthly_budget_usd
+    team         = var.team_name
+    env          = var.env
+    region       = var.aws_region
+    primary_az   = var.primary_az
+    gpu_families = var.gpu_families_enabled
+    member_count = length(var.team_members)
+    team_budget  = var.team_monthly_budget_usd
   }
 }

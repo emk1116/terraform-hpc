@@ -6,7 +6,17 @@ variable "instance_type" { type = string }
 variable "subnet_id" { type = string }
 variable "security_group_ids" { type = list(string) }
 variable "instance_profile_name" { type = string }
-variable "target_group_arn" { type = string }
+variable "target_group_arn" {
+  description = "ALB target group ARN. Empty string means ALB is disabled — skip target group attachment."
+  type        = string
+  default     = ""
+}
+
+variable "cors_allowed_origins" {
+  description = "CORS origins passed to the backend (comma-separated)."
+  type        = string
+  default     = "*"
+}
 
 variable "aurora_writer_endpoint" { type = string }
 variable "aurora_reader_endpoint" { type = string }
@@ -93,8 +103,8 @@ resource "aws_secretsmanager_secret_version" "jwt" {
 
 # Initial admin temp password (bootstrap — user changes on first login)
 resource "random_password" "admin_temp" {
-  length  = 16
-  special = true
+  length           = 16
+  special          = true
   override_special = "!@#$%^&*-_=+"
 }
 
@@ -151,16 +161,16 @@ locals {
   ))
 
   slurm_conf = templatefile("${path.module}/templates/slurm.conf.tpl", {
-    cluster_name      = "titan-${var.team_name}"
-    control_machine   = "head"
-    slurm_partitions  = local.slurm_partitions
-    slurm_nodes       = local.slurm_nodes
-    gres_tres         = local.gres_tres
-    aurora_endpoint   = var.aurora_writer_endpoint
+    cluster_name     = "titan-${var.team_name}"
+    control_machine  = "head"
+    slurm_partitions = local.slurm_partitions
+    slurm_nodes      = local.slurm_nodes
+    gres_tres        = local.gres_tres
+    aurora_endpoint  = var.aurora_writer_endpoint
   })
 
   slurmdbd_conf = templatefile("${path.module}/templates/slurmdbd.conf.tpl", {
-    aurora_endpoint = var.aurora_writer_endpoint
+    aurora_endpoint  = var.aurora_writer_endpoint
     slurm_secret_arn = var.aurora_slurm_secret_arn
     aws_region       = var.aws_region
   })
@@ -169,11 +179,11 @@ locals {
 
   # resume-node.sh generated from template
   resume_script = templatefile("${path.module}/templates/resume-node.sh.tpl", {
-    team_name               = var.team_name
-    aws_region              = var.aws_region
-    primary_subnet_id       = var.compute_subnet_ids_by_az[var.primary_az]
+    team_name                = var.team_name
+    aws_region               = var.aws_region
+    primary_subnet_id        = var.compute_subnet_ids_by_az[var.primary_az]
     compute_subnet_ids_by_az = jsonencode(var.compute_subnet_ids_by_az)
-    launch_template_ids     = jsonencode(var.launch_template_ids)
+    launch_template_ids      = jsonencode(var.launch_template_ids)
     gpu_family_instance_types = jsonencode({
       for family, spec in var.gpu_family_spec : family => spec.instance_type
     })
@@ -229,8 +239,8 @@ resource "aws_s3_object" "suspend_script" {
 locals {
   users_seed = jsonencode({
     admin = {
-      email          = var.admin_email
-      temp_password  = random_password.admin_temp.result
+      email         = var.admin_email
+      temp_password = random_password.admin_temp.result
     }
     members = var.team_members
   })
@@ -251,13 +261,13 @@ resource "aws_ssm_parameter" "users_seed" {
 
 locals {
   user_data = templatefile("${path.module}/templates/head-user-data.sh.tpl", {
-    team_name                = var.team_name
-    env                      = var.env
-    aws_region               = var.aws_region
-    s3_bucket                = var.s3_bucket_name
-    ecr_registry             = var.ecr_registry_url
-    fsx_dns_name             = var.fsx_dns_name
-    fsx_mount_name           = var.fsx_mount_name
+    team_name      = var.team_name
+    env            = var.env
+    aws_region     = var.aws_region
+    s3_bucket      = var.s3_bucket_name
+    ecr_registry   = var.ecr_registry_url
+    fsx_dns_name   = var.fsx_dns_name
+    fsx_mount_name = var.fsx_mount_name
 
     aurora_endpoint          = var.aurora_writer_endpoint
     aurora_reader_endpoint   = var.aurora_reader_endpoint
@@ -265,18 +275,19 @@ locals {
     aurora_slurm_secret_arn  = var.aurora_slurm_secret_arn
     aurora_jobui_secret_arn  = var.aurora_jobui_secret_arn
 
-    valkey_endpoint          = var.valkey_endpoint
+    valkey_endpoint = var.valkey_endpoint
 
-    jwt_secret_arn           = aws_secretsmanager_secret.jwt.arn
-    admin_temp_secret_arn    = aws_secretsmanager_secret.admin_temp.arn
-    users_seed_parameter     = aws_ssm_parameter.users_seed.name
-    munge_key_parameter      = aws_ssm_parameter.munge_key.name
+    jwt_secret_arn        = aws_secretsmanager_secret.jwt.arn
+    admin_temp_secret_arn = aws_secretsmanager_secret.admin_temp.arn
+    users_seed_parameter  = aws_ssm_parameter.users_seed.name
+    munge_key_parameter   = aws_ssm_parameter.munge_key.name
 
-    admin_email              = var.admin_email
-    jwt_expiry_hours         = var.jwt_expiry_hours
-    default_user_budget      = var.default_user_monthly_budget
+    admin_email          = var.admin_email
+    jwt_expiry_hours     = var.jwt_expiry_hours
+    default_user_budget  = var.default_user_monthly_budget
+    cors_allowed_origins = var.cors_allowed_origins
 
-    gpu_family_spec_json     = jsonencode(var.gpu_family_spec)
+    gpu_family_spec_json = jsonencode(var.gpu_family_spec)
   })
 }
 
@@ -324,6 +335,7 @@ resource "aws_instance" "head" {
 # ----------------------------------------------------------------------------
 
 resource "aws_lb_target_group_attachment" "head" {
+  count            = var.target_group_arn != "" ? 1 : 0
   target_group_arn = var.target_group_arn
   target_id        = aws_instance.head.id
   port             = 80

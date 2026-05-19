@@ -57,8 +57,27 @@ variable "alb_allowed_cidrs" {
 }
 
 variable "acm_certificate_arn" {
-  description = "ARN of an ACM certificate in the same region for the ALB HTTPS listener. Must cover the hostname you'll use."
+  description = "ARN of an ACM certificate in the same region for the ALB HTTPS listener. Required only when enable_alb=true."
   type        = string
+  default     = ""
+}
+
+variable "enable_alb" {
+  description = "Whether to deploy the public ALB. Set false to use SSM port-forwarding from a local podman UI to the head node (saves ~$0.55/day and avoids the ACM cert requirement)."
+  type        = bool
+  default     = false
+}
+
+variable "head_node_http_cidrs" {
+  description = "CIDRs allowed to reach the head node API on port 80 directly. Default empty = SSM port-forward only. Add your own /32 if you want direct public access."
+  type        = list(string)
+  default     = []
+}
+
+variable "cors_allowed_origins" {
+  description = "Comma-separated list of origins the backend will accept CORS requests from. For local podman UI use 'http://localhost:3000'. Default '*' allows any origin (no credentials)."
+  type        = string
+  default     = "*"
 }
 
 variable "enable_login_node" {
@@ -89,12 +108,12 @@ variable "gpu_max_nodes" {
   description = "Max concurrent compute nodes per GPU family. Must be ≤ your AWS quota."
   type        = map(number)
   default = {
-    t4       = 10
-    a10g     = 20
-    l4       = 15
-    a100     = 2
-    h100-1x  = 4
-    h100-8x  = 1
+    t4      = 10
+    a10g    = 20
+    l4      = 15
+    a100    = 2
+    h100-1x = 4
+    h100-8x = 1
   }
 }
 
@@ -199,6 +218,18 @@ variable "head_node_instance_type" {
 
 variable "login_node_instance_type" {
   description = "Login node size. t3.small is plenty for SSH + job submission."
+  type        = string
+  default     = "t3.small"
+}
+
+variable "enable_workflow_node" {
+  description = "Deploy a separate workflow node for Snakemake/Nextflow. t3.small adds ~$0.50/day. Set false to run workflows on the login node instead."
+  type        = bool
+  default     = true
+}
+
+variable "workflow_node_instance_type" {
+  description = "Workflow node size. t3.small handles Snakemake DAGs comfortably."
   type        = string
   default     = "t3.small"
 }

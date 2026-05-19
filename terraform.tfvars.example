@@ -1,0 +1,82 @@
+# =============================================================================
+# Titan HPC — cost-optimized example tfvars for $100 AWS-credit testing
+#
+# Copy to terraform.tfvars, then edit ssh_allowed_cidr, admin_email, and
+# team_members. terraform.tfvars is gitignored.
+#
+# Topology: AWS HPC stack with NO ALB. Local podman serves the React UI and
+# reaches the head node via SSM port-forwarding (no public ingress, no ACM
+# cert required).
+#
+# Always-on baseline (~$10.50/day with ALB off): head node, login node,
+# workflow node, Aurora min ACU, Valkey, FSx 1.2 TiB, NAT GW, 8 VPC endpoints.
+# A 4-hour deploy → test → destroy cycle costs ~$2-5.
+# =============================================================================
+
+# --- Identity ---
+team_name  = "titan"
+env        = "non-prod"
+aws_region = "us-east-1"
+primary_az = "us-east-1f"
+
+# --- Network ---
+vpc_cidr          = "10.20.0.0/16"
+ssh_allowed_cidr  = "203.0.113.5/32"   # <-- REPLACE with your /32. `curl ifconfig.me`
+alb_allowed_cidrs = ["0.0.0.0/0"]      # only used when enable_alb=true
+
+# --- UI topology (ALB-less, podman-local) ---
+enable_alb           = false
+acm_certificate_arn  = ""
+head_node_http_cidrs = []
+cors_allowed_origins = "http://localhost:3000,http://localhost:8080"
+
+# --- Login + workflow nodes ---
+enable_login_node           = true
+login_node_instance_type    = "t3.small"
+enable_workflow_node        = true
+workflow_node_instance_type = "t3.small"
+
+# --- Compute / GPU (cheap families only) ---
+gpu_families_enabled = ["t4", "l4"]
+gpu_max_nodes = {
+  t4      = 4
+  a10g    = 0
+  l4      = 2
+  a100    = 0
+  h100-1x = 0
+  h100-8x = 0
+}
+h100_fallback_azs = []
+
+# --- Storage ---
+fsx_storage_capacity_gib = 1200
+s3_bucket_force_destroy  = true
+
+# --- Database ---
+aurora_min_capacity_acu      = 0.5
+aurora_max_capacity_acu      = 1
+aurora_backup_retention_days = 1
+
+# --- Head node ---
+head_node_instance_type = "t3.medium"
+
+# --- jobui ---
+jobui_image_tag  = "latest"
+jwt_expiry_hours = 24
+
+# --- Team ---
+admin_email = "admin@example.com"        # <-- REPLACE
+team_members = [
+  {
+    username           = "alice"
+    email              = "alice@example.com"
+    display_name       = "Alice (admin)"
+    role               = "admin"
+    h100_approved      = false
+    monthly_budget_usd = 50
+  },
+]
+
+# --- Cost guardrails ---
+team_monthly_budget_usd         = 100
+default_user_monthly_budget_usd = 25

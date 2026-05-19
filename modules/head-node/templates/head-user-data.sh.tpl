@@ -34,6 +34,7 @@ export MUNGE_KEY_PARAMETER="${munge_key_parameter}"
 export ADMIN_EMAIL="${admin_email}"
 export JWT_EXPIRY_HOURS="${jwt_expiry_hours}"
 export DEFAULT_USER_BUDGET="${default_user_budget}"
+export CORS_ALLOWED_ORIGINS="${cors_allowed_origins}"
 
 export GPU_FAMILY_SPEC='${gpu_family_spec_json}'
 
@@ -148,6 +149,14 @@ done
 mkdir -p /fsx/models /fsx/work /fsx/shared
 chmod 1777 /fsx/work /fsx/shared
 chmod 755 /fsx/models
+
+# Stage the snakemake demo from S3 to FSx (if it was uploaded by the operator).
+# Run: `aws s3 sync examples/snakemake-demo/ s3://$S3_BUCKET/platform/examples/snakemake-demo/`
+# on your laptop after terraform apply.
+aws s3 sync "s3://$S3_BUCKET/platform/examples/snakemake-demo/" \
+    /fsx/shared/snakemake-demo/ 2>/dev/null || \
+    echo "snakemake-demo not in S3 yet — upload it after deploy."
+chmod -R a+rwX /fsx/shared/snakemake-demo 2>/dev/null || true
 
 # ----------------------------------------------------------------------------
 # 6. Render Slurm configs — pull from S3, substitute DB passwords from Secrets
@@ -355,6 +364,7 @@ services:
       ADMIN_EMAIL: "$ADMIN_EMAIL"
       JWT_EXPIRY_HOURS: "$JWT_EXPIRY_HOURS"
       DEFAULT_USER_BUDGET: "$DEFAULT_USER_BUDGET"
+      CORS_ALLOWED_ORIGINS: "$CORS_ALLOWED_ORIGINS"
       GPU_FAMILY_SPEC: '$GPU_FAMILY_SPEC'
       PATH: "/opt/slurm/bin:/opt/slurm/sbin:/usr/local/bin:/usr/bin:/bin"
     ports:
@@ -474,7 +484,7 @@ find "$FSX_WORK" -mindepth 2 -maxdepth 2 -type d -mtime +7 2>/dev/null | while r
     # Only process numeric job IDs (skip sbatch script dirs)
     [[ "$job_id" =~ ^[0-9]+$ ]] || continue
     # Skip if job is still listed in squeue (PENDING or RUNNING)
-    if "$SLURM_BIN/squeue" -j "$job_id" -h -o "%i" 2>/dev/null | grep -q "^${job_id}$"; then
+    if "$SLURM_BIN/squeue" -j "$job_id" -h -o "%i" 2>/dev/null | grep -q "^$${job_id}$$"; then
         continue
     fi
     echo "[$(date -Iseconds)] titan-scratch-cleanup: removing $dir"

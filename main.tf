@@ -105,13 +105,14 @@ locals {
 module "network" {
   source = "./modules/network"
 
-  name_prefix       = local.name_prefix
-  vpc_cidr          = var.vpc_cidr
-  primary_az        = var.primary_az
-  aws_region        = var.aws_region
-  h100_fallback_azs = var.h100_fallback_azs
-  ssh_allowed_cidr  = var.ssh_allowed_cidr
-  alb_allowed_cidrs = var.alb_allowed_cidrs
+  name_prefix          = local.name_prefix
+  vpc_cidr             = var.vpc_cidr
+  primary_az           = var.primary_az
+  aws_region           = var.aws_region
+  h100_fallback_azs    = var.h100_fallback_azs
+  ssh_allowed_cidr     = var.ssh_allowed_cidr
+  alb_allowed_cidrs    = var.alb_allowed_cidrs
+  head_node_http_cidrs = var.head_node_http_cidrs
 }
 
 # ----------------------------------------------------------------------------
@@ -151,13 +152,13 @@ module "ecr" {
 module "iam" {
   source = "./modules/iam"
 
-  name_prefix     = local.name_prefix
-  team_name       = var.team_name
-  aws_region      = var.aws_region
-  s3_bucket_arn   = module.s3.bucket_arn
-  ecr_repo_arns   = module.ecr.repository_arns
-  secrets_arns    = [] # Populated after aurora module creates them
-  aurora_resource_id = null  # Set after aurora module
+  name_prefix        = local.name_prefix
+  team_name          = var.team_name
+  aws_region         = var.aws_region
+  s3_bucket_arn      = module.s3.bucket_arn
+  ecr_repo_arns      = module.ecr.repository_arns
+  secrets_arns       = []   # Populated after aurora module creates them
+  aurora_resource_id = null # Set after aurora module
 }
 
 # ----------------------------------------------------------------------------
@@ -167,15 +168,15 @@ module "iam" {
 module "aurora" {
   source = "./modules/aurora"
 
-  name_prefix              = local.name_prefix
-  team_name                = var.team_name
-  vpc_id                   = module.network.vpc_id
-  db_subnet_ids            = module.network.private_subnet_ids
-  primary_az               = var.primary_az
-  allowed_sg_ids           = [module.network.head_node_sg_id, module.network.compute_sg_id]
-  min_capacity_acu         = var.aurora_min_capacity_acu
-  max_capacity_acu         = var.aurora_max_capacity_acu
-  backup_retention_days    = var.aurora_backup_retention_days
+  name_prefix           = local.name_prefix
+  team_name             = var.team_name
+  vpc_id                = module.network.vpc_id
+  db_subnet_ids         = module.network.private_subnet_ids
+  primary_az            = var.primary_az
+  allowed_sg_ids        = [module.network.head_node_sg_id, module.network.compute_sg_id]
+  min_capacity_acu      = var.aurora_min_capacity_acu
+  max_capacity_acu      = var.aurora_max_capacity_acu
+  backup_retention_days = var.aurora_backup_retention_days
 }
 
 # ----------------------------------------------------------------------------
@@ -206,10 +207,12 @@ module "fsx" {
 }
 
 # ----------------------------------------------------------------------------
-# ALB — public entry point for the web UI
+# ALB — optional public entry point. When disabled, the local podman UI reaches
+# the head node via SSM port-forwarding (recommended for cost-conscious dev).
 # ----------------------------------------------------------------------------
 
 module "alb" {
+  count  = var.enable_alb ? 1 : 0
   source = "./modules/alb"
 
   name_prefix         = local.name_prefix
@@ -217,6 +220,10 @@ module "alb" {
   public_subnet_ids   = module.network.public_subnet_ids
   alb_sg_id           = module.network.alb_sg_id
   acm_certificate_arn = var.acm_certificate_arn
+}
+
+locals {
+  alb_target_group_arn = var.enable_alb ? module.alb[0].jobui_target_group_arn : ""
 }
 
 # ----------------------------------------------------------------------------
@@ -234,38 +241,39 @@ module "head_node" {
   subnet_id             = module.network.private_subnet_ids[0]
   security_group_ids    = [module.network.head_node_sg_id]
   instance_profile_name = module.iam.head_node_instance_profile_name
-  target_group_arn      = module.alb.jobui_target_group_arn
+  target_group_arn      = local.alb_target_group_arn
+  cors_allowed_origins  = var.cors_allowed_origins
 
   # Aurora connection
-  aurora_writer_endpoint   = module.aurora.writer_endpoint
-  aurora_reader_endpoint   = module.aurora.reader_endpoint
-  aurora_slurm_secret_arn  = module.aurora.slurm_db_password_secret_arn
-  aurora_jobui_secret_arn  = module.aurora.jobui_db_password_secret_arn
+  aurora_writer_endpoint  = module.aurora.writer_endpoint
+  aurora_reader_endpoint  = module.aurora.reader_endpoint
+  aurora_slurm_secret_arn = module.aurora.slurm_db_password_secret_arn
+  aurora_jobui_secret_arn = module.aurora.jobui_db_password_secret_arn
 
   # Valkey connection
   valkey_endpoint = module.valkey.endpoint
 
   # S3 and ECR
-  s3_bucket_name     = module.s3.bucket_name
-  ecr_registry_url   = module.ecr.registry_url
+  s3_bucket_name   = module.s3.bucket_name
+  ecr_registry_url = module.ecr.registry_url
 
   # FSx
-  fsx_dns_name     = module.fsx.dns_name
-  fsx_mount_name   = module.fsx.mount_name
+  fsx_dns_name   = module.fsx.dns_name
+  fsx_mount_name = module.fsx.mount_name
 
   # Slurm / compute fleet config (passed through to resume-node.sh and slurm.conf)
-  gpu_family_spec  = local.active_gpus
-  gpu_max_nodes    = var.gpu_max_nodes
-  compute_ami_id   = module.compute_fleet.ami_id
-  launch_template_ids = module.compute_fleet.launch_template_ids
+  gpu_family_spec          = local.active_gpus
+  gpu_max_nodes            = var.gpu_max_nodes
+  compute_ami_id           = module.compute_fleet.ami_id
+  launch_template_ids      = module.compute_fleet.launch_template_ids
   compute_subnet_ids_by_az = module.network.compute_subnet_ids_by_az
-  primary_az       = var.primary_az
+  primary_az               = var.primary_az
 
   # Team config (seeded into jobui DB on first boot)
-  team_members                  = var.team_members
-  admin_email                   = var.admin_email
-  jwt_expiry_hours              = var.jwt_expiry_hours
-  default_user_monthly_budget   = var.default_user_monthly_budget_usd
+  team_members                = var.team_members
+  admin_email                 = var.admin_email
+  jwt_expiry_hours            = var.jwt_expiry_hours
+  default_user_monthly_budget = var.default_user_monthly_budget_usd
 
   depends_on = [module.aurora, module.valkey, module.fsx]
 }
@@ -289,6 +297,31 @@ module "login_node" {
   fsx_dns_name   = module.fsx.dns_name
   fsx_mount_name = module.fsx.mount_name
   head_node_ip   = module.head_node.private_ip
+}
+
+# ----------------------------------------------------------------------------
+# Workflow node — Snakemake/Nextflow runner. Reuses the head_node IAM role
+# (same access: SSM, S3, ECR, Secrets, CW Logs).
+# ----------------------------------------------------------------------------
+
+module "workflow_node" {
+  count  = var.enable_workflow_node ? 1 : 0
+  source = "./modules/workflow-node"
+
+  name_prefix           = local.name_prefix
+  team_name             = var.team_name
+  aws_region            = var.aws_region
+  instance_type         = var.workflow_node_instance_type
+  subnet_id             = module.network.private_subnet_ids[0]
+  security_group_ids    = [module.network.head_node_sg_id] # reuses head SG for Slurm port access
+  instance_profile_name = module.iam.head_node_instance_profile_name
+  fsx_dns_name          = module.fsx.dns_name
+  fsx_mount_name        = module.fsx.mount_name
+  head_node_ip          = module.head_node.private_ip
+  s3_bucket_name        = module.s3.bucket_name
+  munge_key_parameter   = "/titan-hpc/${var.team_name}/munge-key"
+
+  depends_on = [module.head_node]
 }
 
 # ----------------------------------------------------------------------------

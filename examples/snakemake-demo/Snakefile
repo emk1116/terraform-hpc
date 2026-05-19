@@ -1,0 +1,163 @@
+# =============================================================================
+# Titan HPC — Snakemake fan-out demo
+#
+# Pipeline:
+#   1. chunk     — split input FASTA into N chunks (runs locally on head/login)
+#   2. inference — run inference on each chunk in parallel as Slurm GPU jobs
+#   3. merge     — join the per-chunk JSON outputs into one result
+#
+# Run on the login or head node:
+#   cd /fsx/shared/snakemake-demo
+#   snakemake --profile slurm --jobs 5
+#
+# Outputs land in /fsx/shared/snakemake-demo/results/
+# =============================================================================
+
+import os
+from pathlib import Path
+
+WORKDIR     = Path(os.environ.get("DEMO_WORKDIR", "/fsx/shared/snakemake-demo"))
+INPUT_FILE  = WORKDIR / "input" / "sample.fasta"
+CHUNK_DIR   = WORKDIR / "scratch" / "chunks"
+RESULT_DIR  = WORKDIR / "scratch" / "results"
+FINAL_DIR   = WORKDIR / "results"
+N_CHUNKS    = int(os.environ.get("DEMO_N_CHUNKS", "5"))
+CHUNK_IDS   = [f"{i:03d}" for i in range(N_CHUNKS)]
+
+# Inference command: any container in your ECR; defaults to the smoke image
+INFER_IMAGE = os.environ.get(
+    "DEMO_INFER_IMAGE",
+    "nvidia/cuda:12.2.0-base-ubuntu22.04",  # smoke fallback; only runs nvidia-smi
+)
+
+
+rule all:
+    input:
+        FINAL_DIR / "summary.json"
+
+
+rule chunk:
+    """Split the input FASTA into N approximately-equal pieces.
+    Runs locally on the head/login node (no Slurm submission)."""
+    input:
+        INPUT_FILE
+    output:
+        expand(str(CHUNK_DIR / "chunk-{i}.fasta"), i=CHUNK_IDS)
+    params:
+        n=N_CHUNKS,
+        chunk_dir=str(CHUNK_DIR),
+    localrule: True
+    shell:
+        r"""
+        mkdir -p {params.chunk_dir}
+        python3 - <<'PY'
+import os, re
+from pathlib import Path
+inp = Path("{input}")
+chunks = []
+buf = []
+records = []
+for line in inp.read_text().splitlines():
+    if line.startswith(">"):
+        if buf:
+            records.append("\n".join(buf))
+        buf = [line]
+    else:
+        buf.append(line)
+if buf:
+    records.append("\n".join(buf))
+
+n = {params.n}
+chunk_size = max(1, (len(records) + n - 1) // n)
+for i in range(n):
+    sl = records[i*chunk_size:(i+1)*chunk_size]
+    out = Path("{params.chunk_dir}") / f"chunk-{{i:03d}}.fasta"
+    out.write_text("\n".join(sl) + "\n" if sl else "")
+print(f"split {{len(records)}} records into {{n}} chunks")
+PY
+        """
+
+
+rule inference:
+    """Per-chunk GPU inference. Each invocation becomes a separate Slurm job
+    on the gpu-t4 partition. Replace the container image with your model."""
+    input:
+        CHUNK_DIR / "chunk-{i}.fasta"
+    output:
+        RESULT_DIR / "chunk-{i}.json"
+    threads: 4
+    resources:
+        gpu=1,
+        mem_mb=14000,
+        runtime=15,        # minutes
+        slurm_partition="gpu-t4",
+        slurm_account="general",
+    params:
+        image=INFER_IMAGE,
+    shell:
+        r"""
+        set -euo pipefail
+        mkdir -p $(dirname {output})
+
+        # ECR login (idempotent; safe to repeat)
+        if [[ "{params.image}" == *.dkr.ecr.*.amazonaws.com/* ]]; then
+            REGION=$(echo {params.image} | sed -E 's|.*\.dkr\.ecr\.([^.]+)\.amazonaws\.com.*|\1|')
+            REG=$(echo {params.image} | cut -d/ -f1)
+            aws ecr get-login-password --region "$REGION" | \
+                docker login --username AWS --password-stdin "$REG"
+        fi
+
+        docker pull {params.image} >/dev/null
+
+        # Smoke path: if the image is the CUDA base image, just nvidia-smi and
+        # write a stub JSON. Real models would mount weights and run inference.
+        if [[ "{params.image}" == nvidia/cuda:* ]]; then
+            docker run --rm --gpus all {params.image} nvidia-smi -L > /tmp/gpus.txt
+            python3 -c "
+import json, hashlib, pathlib
+chunk = pathlib.Path('{input}').read_text()
+result = {{
+    'chunk': '{wildcards.i}',
+    'record_count': sum(1 for line in chunk.splitlines() if line.startswith('>')),
+    'chunk_sha256': hashlib.sha256(chunk.encode()).hexdigest(),
+    'gpus_seen': open('/tmp/gpus.txt').read().strip().splitlines(),
+}}
+pathlib.Path('{output}').write_text(json.dumps(result, indent=2))
+"
+        else
+            # Real model path
+            docker run --rm --gpus all \
+                -v {input}:/data/input/chunk.fasta:ro \
+                -v $(dirname {output}):/data/output \
+                {params.image} \
+                --input /data/input/chunk.fasta \
+                --output /data/output/chunk-{wildcards.i}.json
+        fi
+        """
+
+
+rule merge:
+    """Combine per-chunk JSON outputs into a single summary.
+    Runs locally — no GPU needed."""
+    input:
+        expand(str(RESULT_DIR / "chunk-{i}.json"), i=CHUNK_IDS)
+    output:
+        FINAL_DIR / "summary.json"
+    localrule: True
+    shell:
+        r"""
+        mkdir -p $(dirname {output})
+        python3 - <<'PY'
+import json, sys
+from pathlib import Path
+chunks = [json.loads(Path(p).read_text()) for p in "{input}".split()]
+summary = {{
+    "n_chunks": len(chunks),
+    "total_records": sum(c.get("record_count", 0) for c in chunks),
+    "chunks": chunks,
+}}
+Path("{output}").write_text(json.dumps(summary, indent=2))
+print(f"wrote summary with {{summary['n_chunks']}} chunks, "
+      f"{{summary['total_records']}} total records")
+PY
+        """

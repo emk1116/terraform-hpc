@@ -214,10 +214,10 @@ resource "aws_launch_template" "per_gpu" {
   tag_specifications {
     resource_type = "instance"
     tags = {
-      Name       = "${var.name_prefix}-compute-${each.key}"
-      Team       = var.team_name
-      GpuFamily  = each.key
-      Role       = "compute"
+      Name      = "${var.name_prefix}-compute-${each.key}"
+      Team      = var.team_name
+      GpuFamily = each.key
+      Role      = "compute"
     }
   }
 

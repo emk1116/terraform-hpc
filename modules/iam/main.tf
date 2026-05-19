@@ -98,9 +98,9 @@ resource "aws_iam_policy" "s3_access" {
 
 data "aws_iam_policy_document" "ecr_pull" {
   statement {
-    sid     = "EcrAuth"
-    actions = ["ecr:GetAuthorizationToken"]
-    resources = ["*"]  # This action cannot be scoped, per AWS
+    sid       = "EcrAuth"
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"] # This action cannot be scoped, per AWS
   }
 
   statement {
@@ -128,8 +128,8 @@ resource "aws_iam_policy" "ecr_pull" {
 
 data "aws_iam_policy_document" "secrets_read" {
   statement {
-    sid       = "ReadDbSecrets"
-    actions   = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
+    sid     = "ReadDbSecrets"
+    actions = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
     # Wildcard on the team's secret names — specific ARNs have random suffixes
     resources = ["arn:aws:secretsmanager:${var.aws_region}:${local.account_id}:secret:${var.name_prefix}-*"]
   }
