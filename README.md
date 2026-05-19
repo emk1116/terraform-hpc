@@ -17,49 +17,52 @@ Enhanced fork of [`emk1116/terraform-hpc`](https://github.com/emk1116/terraform-
 ## Topology
 
 ```
-                          ┌──────────────────────────────────────────────────┐
-                          │  AWS VPC                                         │
-   operator               │                                                  │
-       │                  │   ┌─────────────────────────────────────────┐    │
-       │  aws ssm         │   │  LOGIN NODE  (the user's entry point)   │    │
-       └──────────────────┼──►│   • shell access (SSM + SSH)            │    │
-                          │   │   • Slurm client: sbatch, squeue, sacct │    │
-                          │   │   • FSx mounted at /fsx                 │    │
-                          │   │   • munge — auth to slurmctld           │    │
-                          │   │   • Snakemake (preinstalled)            │    │
-                          │   └────────────────┬────────────────────────┘    │
-                          │                    │ sbatch over :6817           │
-                          │   ┌────────────────▼────────────────────────┐    │
-                          │   │  HEAD NODE  (invisible control plane)   │    │
-                          │   │   • slurmctld                           │    │
-                          │   │   • slurmdbd → Aurora                   │    │
-                          │   │   • ResumeProgram / SuspendProgram      │    │
-                          │   └────────────────┬────────────────────────┘    │
-                          │                    │ ec2:RunInstances on demand  │
-                          │   ┌────────────────▼────────────────────────┐    │
-                          │   │  COMPUTE FLEET  (autoscaled by Slurm)   │    │
-                          │   │    T4 / L4 / A10G / A100 / H100         │    │
-                          │   └─────────────────────────────────────────┘    │
-                          │                                                  │
-                          │   shared services                                │
-                          │   ┌──────────────┬──────────┬───────────────┐    │
-                          │   │ Aurora v2    │ Valkey   │ FSx Lustre    │    │
-                          │   │ (acct only)  │ (cache)  │ /fsx          │    │
-                          │   └──────────────┴──────────┴───────────────┘    │
-                          │                                                  │
-                          │   ┌─────────────────────────────────────────┐    │
-                          │   │  WORKFLOW NODE  (always deployed)       │    │
-                          │   │   • Snakemake runner                    │    │
-                          │   │   • sbatch over :6817                   │    │
-                          │   └─────────────────────────────────────────┘    │
-                          └──────────────────────────────────────────────────┘
+                  ┌─────────────────────────────────────────────────────────────┐
+                  │  AWS VPC                                                    │
+   operator       │                                                             │
+       │          │  ┌──────────────────────────┐   ┌──────────────────────┐    │
+       │  aws ssm │  │  LOGIN NODE              │   │  WORKFLOW NODE       │    │
+       ├──────────┼─►│  (interactive entry)     │   │  (long-running DAGs) │    │
+       │          │  │  • SSM + SSH (EIP)       │   │  • SSM only          │    │
+       │          │  │  • sbatch / squeue /sacct│   │  • Snakemake daemon  │    │
+       │  aws ssm │  │  • Snakemake preinstalled│   │  • Slurm client      │    │
+       └──────────┼─►│  • munge + slurm.conf    │   │  • munge + slurm.conf│    │
+                  │  │  • FSx /fsx mounted      │   │  • FSx /fsx mounted  │    │
+                  │  └────────────┬─────────────┘   └─────────┬────────────┘    │
+                  │               │                           │                 │
+                  │               │  sbatch over :6817 (munge-authenticated)    │
+                  │               │                           │                 │
+                  │               └────────────┬──────────────┘                 │
+                  │                            ▼                                │
+                  │                ┌────────────────────────────────────┐       │
+                  │                │  HEAD NODE  (control plane only)   │       │
+                  │                │  • slurmctld                       │       │
+                  │                │  • slurmdbd ──► Aurora             │       │
+                  │                │  • ResumeProgram / SuspendProgram  │       │
+                  │                └─────────────────┬──────────────────┘       │
+                  │                                  │ ec2:RunInstances         │
+                  │                                  ▼                          │
+                  │                ┌────────────────────────────────────┐       │
+                  │                │  COMPUTE FLEET (autoscaled 0→N)    │       │
+                  │                │   T4 / L4 / A10G / A100 / H100     │       │
+                  │                └────────────────────────────────────┘       │
+                  │                                                             │
+                  │  shared services (mounted / connected by all nodes above)   │
+                  │  ┌─────────────────────┬───────────────────────────────┐    │
+                  │  │ Aurora v2           │ FSx Lustre /fsx               │    │
+                  │  │ (slurmdbd acct DB)  │ (models, scratch, /shared)    │    │
+                  │  └─────────────────────┴───────────────────────────────┘    │
+                  │                                                             │
+                  │  S3 (uploads, results, slurm.conf, slurm-client tarball,    │
+                  │      completed-job log archives)                            │
+                  │  ECR (model container images)                               │
+                  └─────────────────────────────────────────────────────────────┘
 
-                                       (separate concern, future phase)
-                                       ┌──────────────────────────────┐
-                                       │  Fargate jobui (deployed     │
-                                       │  separately, talks to login  │
-                                       │  node API or sbatch-via-SSH) │
-                                       └──────────────────────────────┘
+                  (separate concern, future phase)
+                  ┌──────────────────────────────────────────────────────┐
+                  │  Fargate jobui — deployed separately, submits jobs   │
+                  │  by talking to the login node (same way users do)    │
+                  └──────────────────────────────────────────────────────┘
 ```
 
 ### Two ways to use the cluster
