@@ -24,13 +24,13 @@ output "head_node_ssm_command" {
 }
 
 output "workflow_node_instance_id" {
-  description = "Workflow node EC2 instance ID (Snakemake / Nextflow runner). Empty when disabled."
-  value       = var.enable_workflow_node ? module.workflow_node[0].instance_id : ""
+  description = "Workflow node EC2 instance ID (Snakemake / Nextflow runner)."
+  value       = module.workflow_node.instance_id
 }
 
 output "workflow_node_ssm_command" {
   description = "Open a shell on the workflow node via SSM."
-  value       = var.enable_workflow_node ? "aws ssm start-session --region ${var.aws_region} --target ${module.workflow_node[0].instance_id}" : "(workflow node disabled)"
+  value       = "aws ssm start-session --region ${var.aws_region} --target ${module.workflow_node.instance_id}"
 }
 
 output "aurora_writer_endpoint" {

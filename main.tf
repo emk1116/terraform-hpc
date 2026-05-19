@@ -258,11 +258,11 @@ module "login_node" {
 }
 
 # ----------------------------------------------------------------------------
-# Workflow node — optional Snakemake / Nextflow runner.
+# Workflow node — Snakemake / Nextflow runner. Required component; sits
+# alongside the login node and submits DAG jobs into the cluster.
 # ----------------------------------------------------------------------------
 
 module "workflow_node" {
-  count  = var.enable_workflow_node ? 1 : 0
   source = "./modules/workflow-node"
 
   name_prefix           = local.name_prefix

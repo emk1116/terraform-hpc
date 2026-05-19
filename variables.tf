@@ -147,14 +147,8 @@ variable "login_node_instance_type" {
   default     = "t3.small"
 }
 
-variable "enable_workflow_node" {
-  description = "Deploy a separate workflow node for Snakemake/Nextflow. t3.small adds ~$0.50/day. Set false to run workflows on the login node instead."
-  type        = bool
-  default     = true
-}
-
 variable "workflow_node_instance_type" {
-  description = "Workflow node size. t3.small handles Snakemake DAGs comfortably."
+  description = "Workflow node size. Always deployed; t3.small handles Snakemake DAGs comfortably."
   type        = string
   default     = "t3.small"
 }

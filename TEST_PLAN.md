@@ -18,7 +18,7 @@ run `sbatch` / `snakemake` / `nextflow` directly. The optional jobui in
 |---|---|---|
 | Head node `t3.small` (slurmctld + slurmdbd) | $0.0208 | $0.50 |
 | Login node `t3.small` (Slurm CLI + FSx mount) | $0.0208 | $0.50 |
-| Workflow node `t3.small` (optional) | $0.0208 | $0.50 |
+| Workflow node `t3.small` | $0.0208 | $0.50 |
 | Aurora Serverless v2 (0.5 ACU min) | $0.06 | $1.44 |
 | FSx Lustre SCRATCH_2 (1.2 TiB) | $0.14 | $3.36 |
 | NAT Gateway | $0.045 | $1.08 |
