@@ -159,8 +159,9 @@ snakemake --profile slurm --jobs 5
 
 **Pass**: 5 inference jobs spawn in parallel; each produces `scratch/results/chunk-NNN.json`; `merge` rule produces `results/summary.json`. **Cost**: ~$0.30.
 
-> Snakemake can also run on the login node — the workflow node is just for
-> isolation when DAGs are long-running. Try both:
+> Snakemake also runs on the login node (preinstalled) — the workflow node
+> is just for isolation when DAGs are long-running. Either node is a
+> first-class place to launch workflows; try both:
 > ```bash
 > bash /tmp/login-ssm.sh
 > cd /fsx/shared/snakemake-demo && snakemake --profile slurm --jobs 5

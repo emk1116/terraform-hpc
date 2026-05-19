@@ -1,9 +1,11 @@
 # ============================================================================
 # Login node — the user's entry point to the HPC cluster.
 #
-# Provides SSH (public EIP) and SSM access. Has the Slurm client installed
-# so users can run `sbatch`, `squeue`, `sacct` directly. FSx mounted at /fsx.
-# Snakemake / Nextflow can run here for ad-hoc workflows.
+# Provides SSH (public EIP) and SSM access. Has the Slurm client + Snakemake
+# + Nextflow installed so users can run `sbatch`, `squeue`, `sacct`,
+# `snakemake --profile slurm`, or `nextflow run ... -profile slurm` directly.
+# FSx mounted at /fsx. Users can also submit workflow jobs via the future
+# Fargate UI, which itself talks to this login node.
 # ============================================================================
 
 variable "name_prefix" { type = string }
@@ -51,11 +53,17 @@ locals {
     dnf update -y
     dnf install -y jq awscli nc git python3 python3-pip
 
-    # Snakemake + Slurm executor plugin (so users can run snakemake here too)
+    # Workflow engines — both Snakemake and Nextflow available out of the box
+    # so users / the future UI can pick either when submitting jobs.
     pip3 install --upgrade pip
     pip3 install \
         snakemake==8.16.0 \
         snakemake-executor-plugin-slurm==0.11.2
+
+    # Nextflow needs Java 17+; install Amazon Corretto then drop the launcher
+    dnf install -y java-17-amazon-corretto-headless
+    curl -fsSL https://get.nextflow.io -o /usr/local/bin/nextflow
+    chmod +x /usr/local/bin/nextflow
 
     # ---- /etc/hosts: point "head" at the head node (slurm.conf uses it) ----
     echo "${var.head_node_ip} head" >> /etc/hosts

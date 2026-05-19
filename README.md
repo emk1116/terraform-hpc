@@ -26,7 +26,7 @@ Enhanced fork of [`emk1116/terraform-hpc`](https://github.com/emk1116/terraform-
                           │   │   • Slurm client: sbatch, squeue, sacct │    │
                           │   │   • FSx mounted at /fsx                 │    │
                           │   │   • munge — auth to slurmctld           │    │
-                          │   │   • (optional) Snakemake / Nextflow     │    │
+                          │   │   • Snakemake / Nextflow (preinstalled) │    │
                           │   └────────────────┬────────────────────────┘    │
                           │                    │ sbatch over :6817           │
                           │   ┌────────────────▼────────────────────────┐    │
@@ -90,9 +90,9 @@ no fallback path inside the HPC stack that requires a UI; everything is
 ## Components
 
 - **Network** — VPC with public subnets (NAT + login node) and private subnets (head node, workflow node, Aurora, Valkey, compute, FSx). Default deployment AZ is **us-east-1f**.
-- **Login node** — User's entry point. AL2023 in a public subnet, EIP attached. SSM Session Manager + SSH. FSx mounted at `/fsx`. Slurm client installed (sbatch, squeue, sacct).
+- **Login node** — User's entry point. AL2023 in a public subnet, EIP attached. SSM Session Manager + SSH. FSx mounted at `/fsx`. **Slurm client + Snakemake + Nextflow all preinstalled** so users can run `sbatch`, `snakemake --profile slurm`, or `nextflow run ... -profile slurm` directly. The future Fargate UI also submits through this node.
 - **Head node** — Slurm control plane only. Runs `slurmctld` + `slurmdbd`. **No web server, no UI.** Reachable only via SSM by admins. Uploads `slurm.conf` and Slurm client binaries to S3 so other nodes can fetch them.
-- **Workflow node** — t3.small with Snakemake + Slurm executor plugin preinstalled. Required component; provides isolated process space for long-running DAG daemons so they don't fight the login node for resources. Snakemake also runs on the login node for ad-hoc use, but the workflow node is the canonical place to launch long DAGs.
+- **Workflow node** — t3.small with the same Snakemake + Slurm executor plugin preinstalled. Required component; provides isolated process space for long-running DAG daemons so they don't fight interactive use on the login node. Both nodes can submit DAGs — pick the workflow node for production runs and the login node for quick interactive iteration.
 - **Aurora Serverless v2** — holds `slurm_acct_db` (slurmdbd accounting). When the future Fargate UI lands it also gets a `jobui` database; that's not in scope for this repo.
 - **Valkey Serverless** — provisioned in the VPC for the future UI. Not used by the HPC cluster itself.
 - **FSx Lustre SCRATCH_2** — `/fsx/models/<m>/` weights, `/fsx/work/<u>/<job>/` scratch, `/fsx/shared/` for workflows.
