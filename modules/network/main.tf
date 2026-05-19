@@ -4,12 +4,6 @@ variable "primary_az" { type = string }
 variable "aws_region" { type = string }
 variable "h100_fallback_azs" { type = list(string) }
 variable "ssh_allowed_cidr" { type = string }
-variable "alb_allowed_cidrs" { type = list(string) }
-variable "head_node_http_cidrs" {
-  description = "CIDRs allowed to reach the head node's HTTP port directly (for ALB-less local-UI mode). Empty = no direct ingress; SSM port-forwarding still works."
-  type        = list(string)
-  default     = []
-}
 
 # All AZs we might ever land a compute node in
 locals {
@@ -36,24 +30,11 @@ resource "aws_internet_gateway" "main" {
 }
 
 # ----------------------------------------------------------------------------
-# Public subnets — one per AZ we might use (for ALB, login node, NAT GW)
-# ALB requires ≥2 AZs so we always provision at least 2 public subnets
+# Public subnets — one per AZ we might use (for login node, NAT GW)
 # ----------------------------------------------------------------------------
 
-# For ALB: always need at least 2 public subnets in different AZs.
-# We pair primary_az with a second AZ in the same region.
-data "aws_availability_zones" "available" {
-  state = "available"
-}
-
 locals {
-  # Pick a second AZ for ALB HA that's different from primary_az
-  alb_second_az = [
-    for az in data.aws_availability_zones.available.names :
-    az if az != var.primary_az
-  ][0]
-
-  public_subnet_azs = distinct([var.primary_az, local.alb_second_az])
+  public_subnet_azs = [var.primary_az]
 }
 
 resource "aws_subnet" "public" {
@@ -207,40 +188,6 @@ resource "aws_vpc_endpoint" "interface" {
 # Security Groups — one per tier, with explicit ingress rules
 # ----------------------------------------------------------------------------
 
-# ALB SG — open :443 from internet (or restricted CIDRs)
-resource "aws_security_group" "alb" {
-  name_prefix = "${var.name_prefix}-alb-"
-  description = "ALB — public entry point for jobui"
-  vpc_id      = aws_vpc.main.id
-
-  ingress {
-    description = "HTTPS from allowed CIDRs"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = var.alb_allowed_cidrs
-  }
-
-  # Optional HTTP → HTTPS redirect
-  ingress {
-    description = "HTTP for redirect"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = var.alb_allowed_cidrs
-  }
-
-  egress {
-    description = "Forward to head node"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr]
-  }
-
-  tags = { Name = "${var.name_prefix}-alb-sg" }
-}
-
 # Login node SG — SSH from allowed CIDR only
 resource "aws_security_group" "login_node" {
   name_prefix = "${var.name_prefix}-login-"
@@ -265,33 +212,14 @@ resource "aws_security_group" "login_node" {
   tags = { Name = "${var.name_prefix}-login-sg" }
 }
 
-# Head node SG — reached by ALB on :80, SSH from login, Slurm from compute
+# Head node SG — Slurm controller. No web ports. SSM-only admin access.
 resource "aws_security_group" "head_node" {
   name_prefix = "${var.name_prefix}-head-"
-  description = "Head node — slurmctld, slurmdbd, nginx/FastAPI"
+  description = "Head node — slurmctld + slurmdbd"
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    description     = "HTTP from ALB"
-    from_port       = 80
-    to_port         = 80
-    protocol        = "tcp"
-    security_groups = [aws_security_group.alb.id]
-  }
-
-  dynamic "ingress" {
-    for_each = length(var.head_node_http_cidrs) > 0 ? [1] : []
-    content {
-      description = "HTTP direct from operator CIDRs (ALB-less mode)"
-      from_port   = 80
-      to_port     = 80
-      protocol    = "tcp"
-      cidr_blocks = var.head_node_http_cidrs
-    }
-  }
-
-  ingress {
-    description     = "SSH from login node"
+    description     = "SSH from login node (admin convenience)"
     from_port       = 22
     to_port         = 22
     protocol        = "tcp"
@@ -400,7 +328,6 @@ output "compute_subnet_ids_by_az" {
   value       = { for az, s in aws_subnet.private : az => s.id }
 }
 
-output "alb_sg_id" { value = aws_security_group.alb.id }
 output "login_node_sg_id" { value = aws_security_group.login_node.id }
 output "head_node_sg_id" { value = aws_security_group.head_node.id }
 output "compute_sg_id" { value = aws_security_group.compute.id }

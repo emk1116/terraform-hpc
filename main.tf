@@ -1,6 +1,11 @@
 # ============================================================================
 # Titan HPC — GPU Inference Platform
 # Root module. Invoke once per team.
+#
+# Pure HPC: Slurm + autoscaled GPU compute + FSx + S3.
+# Users SSM into the login node and run sbatch / snakemake / nextflow directly.
+# The optional web UI is a separate concern (future Fargate deployment) and is
+# not built by this terraform apply.
 # ============================================================================
 
 locals {
@@ -105,18 +110,16 @@ locals {
 module "network" {
   source = "./modules/network"
 
-  name_prefix          = local.name_prefix
-  vpc_cidr             = var.vpc_cidr
-  primary_az           = var.primary_az
-  aws_region           = var.aws_region
-  h100_fallback_azs    = var.h100_fallback_azs
-  ssh_allowed_cidr     = var.ssh_allowed_cidr
-  alb_allowed_cidrs    = var.alb_allowed_cidrs
-  head_node_http_cidrs = var.head_node_http_cidrs
+  name_prefix       = local.name_prefix
+  vpc_cidr          = var.vpc_cidr
+  primary_az        = var.primary_az
+  aws_region        = var.aws_region
+  h100_fallback_azs = var.h100_fallback_azs
+  ssh_allowed_cidr  = var.ssh_allowed_cidr
 }
 
 # ----------------------------------------------------------------------------
-# S3 data bucket — input uploads, results, model weights (DRA source)
+# S3 data bucket — input uploads, results, model weights
 # ----------------------------------------------------------------------------
 
 module "s3" {
@@ -137,7 +140,6 @@ module "ecr" {
   name_prefix = local.name_prefix
   team_name   = var.team_name
 
-  # Initial repos; admins can push more later via standard aws ecr CLI
   initial_repos = [
     "models/generic",
     "models/evo2",
@@ -152,17 +154,15 @@ module "ecr" {
 module "iam" {
   source = "./modules/iam"
 
-  name_prefix        = local.name_prefix
-  team_name          = var.team_name
-  aws_region         = var.aws_region
-  s3_bucket_arn      = module.s3.bucket_arn
-  ecr_repo_arns      = module.ecr.repository_arns
-  secrets_arns       = []   # Populated after aurora module creates them
-  aurora_resource_id = null # Set after aurora module
+  name_prefix   = local.name_prefix
+  team_name     = var.team_name
+  aws_region    = var.aws_region
+  s3_bucket_arn = module.s3.bucket_arn
+  ecr_repo_arns = module.ecr.repository_arns
 }
 
 # ----------------------------------------------------------------------------
-# Aurora Serverless v2 MySQL — slurm_acct_db + jobui databases
+# Aurora Serverless v2 MySQL — holds slurm_acct_db for slurmdbd accounting
 # ----------------------------------------------------------------------------
 
 module "aurora" {
@@ -180,19 +180,6 @@ module "aurora" {
 }
 
 # ----------------------------------------------------------------------------
-# Valkey Serverless — ElastiCache for sessions, rate limiting, queue cache
-# ----------------------------------------------------------------------------
-
-module "valkey" {
-  source = "./modules/valkey"
-
-  name_prefix    = local.name_prefix
-  vpc_id         = module.network.vpc_id
-  subnet_ids     = module.network.private_subnet_ids
-  allowed_sg_ids = [module.network.head_node_sg_id]
-}
-
-# ----------------------------------------------------------------------------
 # FSx Lustre — shared filesystem for models and per-job scratch
 # ----------------------------------------------------------------------------
 
@@ -207,27 +194,7 @@ module "fsx" {
 }
 
 # ----------------------------------------------------------------------------
-# ALB — optional public entry point. When disabled, the local podman UI reaches
-# the head node via SSM port-forwarding (recommended for cost-conscious dev).
-# ----------------------------------------------------------------------------
-
-module "alb" {
-  count  = var.enable_alb ? 1 : 0
-  source = "./modules/alb"
-
-  name_prefix         = local.name_prefix
-  vpc_id              = module.network.vpc_id
-  public_subnet_ids   = module.network.public_subnet_ids
-  alb_sg_id           = module.network.alb_sg_id
-  acm_certificate_arn = var.acm_certificate_arn
-}
-
-locals {
-  alb_target_group_arn = var.enable_alb ? module.alb[0].jobui_target_group_arn : ""
-}
-
-# ----------------------------------------------------------------------------
-# Head node — Slurm controller + FastAPI + React UI + slurmdbd
+# Head node — Slurm controller (slurmctld + slurmdbd). Not user-facing.
 # ----------------------------------------------------------------------------
 
 module "head_node" {
@@ -241,21 +208,13 @@ module "head_node" {
   subnet_id             = module.network.private_subnet_ids[0]
   security_group_ids    = [module.network.head_node_sg_id]
   instance_profile_name = module.iam.head_node_instance_profile_name
-  target_group_arn      = local.alb_target_group_arn
-  cors_allowed_origins  = var.cors_allowed_origins
 
-  # Aurora connection
+  # Aurora (for slurmdbd accounting only)
   aurora_writer_endpoint  = module.aurora.writer_endpoint
-  aurora_reader_endpoint  = module.aurora.reader_endpoint
   aurora_slurm_secret_arn = module.aurora.slurm_db_password_secret_arn
-  aurora_jobui_secret_arn = module.aurora.jobui_db_password_secret_arn
 
-  # Valkey connection
-  valkey_endpoint = module.valkey.endpoint
-
-  # S3 and ECR
-  s3_bucket_name   = module.s3.bucket_name
-  ecr_registry_url = module.ecr.registry_url
+  # S3 (for slurm.conf, slurm-client tarball, log archives)
+  s3_bucket_name = module.s3.bucket_name
 
   # FSx
   fsx_dns_name   = module.fsx.dns_name
@@ -269,17 +228,11 @@ module "head_node" {
   compute_subnet_ids_by_az = module.network.compute_subnet_ids_by_az
   primary_az               = var.primary_az
 
-  # Team config (seeded into jobui DB on first boot)
-  team_members                = var.team_members
-  admin_email                 = var.admin_email
-  jwt_expiry_hours            = var.jwt_expiry_hours
-  default_user_monthly_budget = var.default_user_monthly_budget_usd
-
-  depends_on = [module.aurora, module.valkey, module.fsx]
+  depends_on = [module.aurora, module.fsx]
 }
 
 # ----------------------------------------------------------------------------
-# Login node — optional SSH entry point
+# Login node — user entry point. SSM/SSH in, run sbatch directly.
 # ----------------------------------------------------------------------------
 
 module "login_node" {
@@ -287,21 +240,25 @@ module "login_node" {
   source = "./modules/login-node"
 
   name_prefix           = local.name_prefix
+  team_name             = var.team_name
+  aws_region            = var.aws_region
   instance_type         = var.login_node_instance_type
   subnet_id             = module.network.public_subnet_ids[0]
   security_group_ids    = [module.network.login_node_sg_id]
   instance_profile_name = module.iam.login_node_instance_profile_name
-  ssh_public_key        = file("${pathexpand("~/.ssh/titan-hpc.pub")}")
+  ssh_public_key        = file(pathexpand("~/.ssh/titan-hpc.pub"))
 
-  # Needs to know FSx and head node to mount/submit
-  fsx_dns_name   = module.fsx.dns_name
-  fsx_mount_name = module.fsx.mount_name
-  head_node_ip   = module.head_node.private_ip
+  fsx_dns_name        = module.fsx.dns_name
+  fsx_mount_name      = module.fsx.mount_name
+  head_node_ip        = module.head_node.private_ip
+  s3_bucket_name      = module.s3.bucket_name
+  munge_key_parameter = "/titan-hpc/${var.team_name}/munge-key"
+
+  depends_on = [module.head_node]
 }
 
 # ----------------------------------------------------------------------------
-# Workflow node — Snakemake/Nextflow runner. Reuses the head_node IAM role
-# (same access: SSM, S3, ECR, Secrets, CW Logs).
+# Workflow node — optional Snakemake / Nextflow runner.
 # ----------------------------------------------------------------------------
 
 module "workflow_node" {
@@ -313,7 +270,7 @@ module "workflow_node" {
   aws_region            = var.aws_region
   instance_type         = var.workflow_node_instance_type
   subnet_id             = module.network.private_subnet_ids[0]
-  security_group_ids    = [module.network.head_node_sg_id] # reuses head SG for Slurm port access
+  security_group_ids    = [module.network.head_node_sg_id]
   instance_profile_name = module.iam.head_node_instance_profile_name
   fsx_dns_name          = module.fsx.dns_name
   fsx_mount_name        = module.fsx.mount_name

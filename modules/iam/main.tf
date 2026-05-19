@@ -3,14 +3,6 @@ variable "team_name" { type = string }
 variable "aws_region" { type = string }
 variable "s3_bucket_arn" { type = string }
 variable "ecr_repo_arns" { type = list(string) }
-variable "secrets_arns" {
-  type    = list(string)
-  default = []
-}
-variable "aurora_resource_id" {
-  type    = string
-  default = null
-}
 
 data "aws_caller_identity" "current" {}
 

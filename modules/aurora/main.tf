@@ -84,12 +84,6 @@ resource "random_password" "slurm_user" {
   override_special = "!#$%&*()-_=+[]{}<>?"
 }
 
-resource "random_password" "jobui_rw_user" {
-  length           = 32
-  special          = true
-  override_special = "!#$%&*()-_=+[]{}<>?"
-}
-
 resource "aws_secretsmanager_secret" "master" {
   name_prefix             = "${var.name_prefix}-aurora-master-"
   description             = "Aurora master password for ${var.name_prefix}"
@@ -118,22 +112,6 @@ resource "aws_secretsmanager_secret_version" "slurm_user" {
     username = "slurm"
     password = random_password.slurm_user.result
     database = "slurm_acct_db"
-  })
-}
-
-resource "aws_secretsmanager_secret" "jobui_rw" {
-  name_prefix             = "${var.name_prefix}-aurora-jobui-"
-  description             = "MySQL user for jobui app (read/write on jobui DB, read-only on slurm_acct_db)"
-  kms_key_id              = aws_kms_key.aurora.arn
-  recovery_window_in_days = 7
-}
-
-resource "aws_secretsmanager_secret_version" "jobui_rw" {
-  secret_id = aws_secretsmanager_secret.jobui_rw.id
-  secret_string = jsonencode({
-    username = "jobui_rw"
-    password = random_password.jobui_rw_user.result
-    database = "jobui"
   })
 }
 
@@ -197,34 +175,6 @@ resource "aws_rds_cluster_instance" "writer" {
 # runs on first boot.
 # ----------------------------------------------------------------------------
 
-locals {
-  bootstrap_sql = <<-SQL
-    -- Create the jobui database
-    CREATE DATABASE IF NOT EXISTS jobui
-      DEFAULT CHARACTER SET utf8mb4
-      DEFAULT COLLATE utf8mb4_unicode_ci;
-
-    -- Slurm user: full rights on slurm_acct_db
-    CREATE USER IF NOT EXISTS 'slurm'@'%' IDENTIFIED BY '__SLURM_PASSWORD__';
-    GRANT ALL PRIVILEGES ON slurm_acct_db.* TO 'slurm'@'%';
-
-    -- jobui_rw user: full rights on jobui, SELECT-only on slurm_acct_db
-    CREATE USER IF NOT EXISTS 'jobui_rw'@'%' IDENTIFIED BY '__JOBUI_PASSWORD__';
-    GRANT ALL PRIVILEGES ON jobui.* TO 'jobui_rw'@'%';
-    GRANT SELECT ON slurm_acct_db.* TO 'jobui_rw'@'%';
-
-    FLUSH PRIVILEGES;
-  SQL
-}
-
-# Expose the bootstrap SQL to the head-node module via an output;
-# the head node runs it on first boot via a systemd oneshot service.
-output "bootstrap_sql" {
-  description = "SQL to create databases + scoped users. Head node runs this on first boot, substituting passwords from Secrets Manager."
-  value       = local.bootstrap_sql
-  sensitive   = true
-}
-
 # ----------------------------------------------------------------------------
 # Outputs
 # ----------------------------------------------------------------------------
@@ -232,11 +182,8 @@ output "bootstrap_sql" {
 output "writer_endpoint" { value = aws_rds_cluster.main.endpoint }
 output "reader_endpoint" { value = aws_rds_cluster.main.reader_endpoint }
 output "port" { value = aws_rds_cluster.main.port }
-output "cluster_resource_id" { value = aws_rds_cluster.main.cluster_resource_id }
 
 output "master_password_secret_arn" { value = aws_secretsmanager_secret.master.arn }
 output "slurm_db_password_secret_arn" { value = aws_secretsmanager_secret.slurm_user.arn }
-output "jobui_db_password_secret_arn" { value = aws_secretsmanager_secret.jobui_rw.arn }
 
-output "kms_key_arn" { value = aws_kms_key.aurora.arn }
 output "security_group_id" { value = aws_security_group.aurora.id }

@@ -1,59 +1,41 @@
-# Local podman UI for Titan HPC
+# local-ui — Development environment for the future Fargate jobui
 
-This directory runs the Titan HPC frontend on your laptop while the rest of
-the stack (Slurm, FSx, Aurora, compute) lives in AWS. There is **no public
-ingress** to the AWS stack — the local UI reaches the head node through an
-SSM port-forwarding tunnel, so there is no ALB, no public IP, no ACM cert.
+> **Status: not part of the deployed HPC stack.**
+>
+> The HPC cluster in this repo is pure HPC — `terraform apply` does not deploy
+> any web UI. Users `aws ssm start-session` into the login node and run
+> `sbatch` / `snakemake` / `nextflow` directly. See the repo [README](../README.md)
+> for the topology.
+>
+> This `local-ui/` directory exists as a development convenience for the
+> **future Fargate-deployed jobui** that will be built in a later phase. The
+> podman setup here lets a developer iterate on the React SPA locally against
+> a (currently nonexistent) backend, so the UI is ready when the Fargate
+> module ships.
 
-## Prerequisites
+## What's here
 
-- `aws` CLI v2 with valid credentials (`aws sts get-caller-identity` works)
-- The Session Manager plugin (`aws ssm start-session` must succeed)
-- `podman` and `podman-compose` (or substitute `docker compose`)
-- A successful `terraform apply` of the HPC stack
+- `podman-compose.yml` — builds the frontend from `../jobui/frontend/`
+- `nginx-local.conf` — serves the SPA on `localhost:3000` and reverse-proxies
+  `/api/*` to `host.containers.internal:8080`
 
-## Run
+## Will it work today?
+
+No — there is no backend listening on `:8080` once the HPC stack is deployed,
+because the head node no longer runs the jobui Docker compose stack. The
+backend half of jobui still lives at `jobui/backend/` as reference code, but
+nothing in this repo runs it.
+
+When the future Fargate jobui module lands:
+- The backend will run on Fargate (or, for development, locally with
+  `podman-compose` reading from `../jobui/backend/`)
+- Local podman SPA development will work via this directory
+- Tests and CI will exercise the full flow
+
+Until then, **use the CLI**:
 
 ```bash
-# Terminal 1 — SSM port-forward to the head node (leave running)
-$(terraform output -raw ssm_port_forward_command)
-
-# Terminal 2 — start the UI
-cd local-ui
-podman-compose up --build
+aws ssm start-session --target $(terraform output -raw login_node_instance_id)
+# Then on the login node:
+sbatch jobs/inference_job.sh
 ```
-
-Open <http://localhost:3000>. Sign in with the credentials from
-`terraform output admin_temp_password_command` (run that command separately).
-You will be redirected to `/change-password` on first login.
-
-## Topology
-
-```
-┌───────────────────┐       ┌───────────────────┐       ┌──────────────────┐
-│  Your laptop      │       │  SSM tunnel       │       │  AWS head node   │
-│                   │       │  (no public IP)   │       │                  │
-│  Browser ───┐     │       │                   │       │  nginx :80       │
-│             │     │       │                   │       │    │             │
-│  podman SPA │     │       │                   │       │    ▼             │
-│  nginx :80 ─┼─────┼──:8080┼───────────────────┼──:80──┼─ jobui-backend   │
-│             │     │       │                   │       │   :8000          │
-│             │     │       │                   │       │                  │
-│  /api/* ────┘     │       │                   │       │                  │
-└───────────────────┘       └───────────────────┘       └──────────────────┘
-```
-
-- Browser sees `http://localhost:3000` for everything — same origin, no CORS
-- `localhost:3000/api/*` is reverse-proxied to `host.containers.internal:8080`
-- That maps to your laptop's `:8080` which is the SSM tunnel endpoint
-- The tunnel forwards to the head node's port 80 (nginx → FastAPI)
-
-## Troubleshooting
-
-- **`Bad Gateway` from nginx** — the SSM tunnel is not running. Check Terminal 1.
-- **`host.containers.internal` does not resolve** — your podman/distro doesn't
-  set this automatically. Replace it in `nginx-local.conf` with the actual IP
-  of your host gateway (often `10.0.2.2` on rootless podman).
-- **CORS errors in browser console** — should never happen with this setup
-  since the browser only talks to localhost. If you do see them, the frontend
-  is bypassing the proxy and going direct to the head node.

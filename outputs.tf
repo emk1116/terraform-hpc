@@ -1,42 +1,41 @@
-output "jobui_url" {
-  description = "URL for the web UI when ALB is enabled. Empty when running ALB-less + local podman UI."
-  value       = var.enable_alb ? module.alb[0].https_url : ""
-}
-
-output "alb_dns_name" {
-  description = "ALB DNS name when enabled."
-  value       = var.enable_alb ? module.alb[0].dns_name : ""
-}
-
-output "ssm_port_forward_command" {
-  description = "When ALB is disabled, run this on your laptop to expose the head node API at localhost:8080, then start the local podman UI."
-  value       = var.enable_alb ? "" : "aws ssm start-session --region ${var.aws_region} --target ${module.head_node.instance_id} --document-name AWS-StartPortForwardingSession --parameters portNumber=80,localPortNumber=8080"
+output "login_node_instance_id" {
+  description = "Login node EC2 instance ID. Users enter the cluster via: aws ssm start-session --target <id>"
+  value       = var.enable_login_node ? module.login_node[0].instance_id : ""
 }
 
 output "login_node_public_ip" {
-  description = "Public IP of the login node for SSH access (if enabled)."
-  value       = var.enable_login_node ? module.login_node[0].public_ip : null
+  description = "Public IP of the login node (for SSH access; SSM is preferred)."
+  value       = var.enable_login_node ? module.login_node[0].public_ip : ""
+}
+
+output "login_node_ssm_command" {
+  description = "Ready-to-run command to open a shell on the login node."
+  value       = var.enable_login_node ? "aws ssm start-session --region ${var.aws_region} --target ${module.login_node[0].instance_id}" : "(login node disabled)"
 }
 
 output "head_node_instance_id" {
-  description = "Head node EC2 instance ID. Use with 'aws ssm start-session --target <id>' for shell access."
+  description = "Head node EC2 instance ID. Admin-only. SSM access: aws ssm start-session --target <id>"
   value       = module.head_node.instance_id
 }
 
+output "head_node_ssm_command" {
+  description = "Admin SSM access to the head node (slurmctld + slurmdbd)."
+  value       = "aws ssm start-session --region ${var.aws_region} --target ${module.head_node.instance_id}"
+}
+
 output "workflow_node_instance_id" {
-  description = "Workflow node EC2 instance ID (Snakemake/Nextflow runner). Empty when disabled."
+  description = "Workflow node EC2 instance ID (Snakemake / Nextflow runner). Empty when disabled."
   value       = var.enable_workflow_node ? module.workflow_node[0].instance_id : ""
 }
 
 output "workflow_node_ssm_command" {
   description = "Open a shell on the workflow node via SSM."
-  value       = var.enable_workflow_node ? "aws ssm start-session --region ${var.aws_region} --target ${module.workflow_node[0].instance_id}" : ""
+  value       = var.enable_workflow_node ? "aws ssm start-session --region ${var.aws_region} --target ${module.workflow_node[0].instance_id}" : "(workflow node disabled)"
 }
 
 output "aurora_writer_endpoint" {
-  description = "Aurora cluster writer endpoint (for debugging; reachable only from head/compute nodes)."
+  description = "Aurora cluster writer endpoint. Reachable only from head/compute nodes via private subnets."
   value       = module.aurora.writer_endpoint
-  sensitive   = false
 }
 
 output "s3_data_bucket" {
@@ -55,14 +54,9 @@ output "fsx_dns_name" {
 }
 
 output "aurora_master_secret_arn" {
-  description = "Secrets Manager ARN holding the Aurora master password. Retrieve via: aws secretsmanager get-secret-value --secret-id <arn>"
+  description = "Secrets Manager ARN for the Aurora master password."
   value       = module.aurora.master_password_secret_arn
   sensitive   = true
-}
-
-output "admin_temp_password_command" {
-  description = "Command to retrieve the auto-generated admin temp password from Secrets Manager."
-  value       = "aws secretsmanager get-secret-value --region ${var.aws_region} --secret-id ${module.head_node.admin_temp_password_secret_arn} --query SecretString --output text"
 }
 
 output "team_config_summary" {
@@ -73,7 +67,6 @@ output "team_config_summary" {
     region       = var.aws_region
     primary_az   = var.primary_az
     gpu_families = var.gpu_families_enabled
-    member_count = length(var.team_members)
     team_budget  = var.team_monthly_budget_usd
   }
 }

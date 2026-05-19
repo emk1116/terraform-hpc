@@ -1,3 +1,8 @@
+# ============================================================================
+# Head node — Slurm control plane only. Runs slurmctld + slurmdbd.
+# Not user-facing. Admins SSM in for maintenance; end users never log in here.
+# ============================================================================
+
 variable "name_prefix" { type = string }
 variable "team_name" { type = string }
 variable "env" { type = string }
@@ -6,27 +11,11 @@ variable "instance_type" { type = string }
 variable "subnet_id" { type = string }
 variable "security_group_ids" { type = list(string) }
 variable "instance_profile_name" { type = string }
-variable "target_group_arn" {
-  description = "ALB target group ARN. Empty string means ALB is disabled — skip target group attachment."
-  type        = string
-  default     = ""
-}
-
-variable "cors_allowed_origins" {
-  description = "CORS origins passed to the backend (comma-separated)."
-  type        = string
-  default     = "*"
-}
 
 variable "aurora_writer_endpoint" { type = string }
-variable "aurora_reader_endpoint" { type = string }
 variable "aurora_slurm_secret_arn" { type = string }
-variable "aurora_jobui_secret_arn" { type = string }
-
-variable "valkey_endpoint" { type = string }
 
 variable "s3_bucket_name" { type = string }
-variable "ecr_registry_url" { type = string }
 
 variable "fsx_dns_name" { type = string }
 variable "fsx_mount_name" { type = string }
@@ -37,20 +26,6 @@ variable "compute_ami_id" { type = string }
 variable "launch_template_ids" { type = map(string) }
 variable "compute_subnet_ids_by_az" { type = map(string) }
 variable "primary_az" { type = string }
-
-variable "team_members" {
-  type = list(object({
-    username           = string
-    email              = string
-    display_name       = string
-    role               = string
-    h100_approved      = bool
-    monthly_budget_usd = number
-  }))
-}
-variable "admin_email" { type = string }
-variable "jwt_expiry_hours" { type = number }
-variable "default_user_monthly_budget" { type = number }
 
 # ----------------------------------------------------------------------------
 # AMI — Amazon Linux 2023 on head node (doesn't need GPU drivers)
@@ -67,7 +42,8 @@ data "aws_ami" "al2023" {
 }
 
 # ----------------------------------------------------------------------------
-# Munge key — generated once, stored in SSM, compute nodes fetch it
+# Munge key — generated once, stored in SSM. Compute / login / workflow nodes
+# fetch the same key on bootstrap to authenticate Slurm RPCs.
 # ----------------------------------------------------------------------------
 
 resource "random_bytes" "munge" {
@@ -83,44 +59,8 @@ resource "aws_ssm_parameter" "munge_key" {
 }
 
 # ----------------------------------------------------------------------------
-# JWT secret for jobui
-# ----------------------------------------------------------------------------
-
-resource "random_password" "jwt_secret" {
-  length  = 64
-  special = false
-}
-
-resource "aws_secretsmanager_secret" "jwt" {
-  name_prefix             = "${var.name_prefix}-jobui-jwt-"
-  recovery_window_in_days = 7
-}
-
-resource "aws_secretsmanager_secret_version" "jwt" {
-  secret_id     = aws_secretsmanager_secret.jwt.id
-  secret_string = random_password.jwt_secret.result
-}
-
-# Initial admin temp password (bootstrap — user changes on first login)
-resource "random_password" "admin_temp" {
-  length           = 16
-  special          = true
-  override_special = "!@#$%^&*-_=+"
-}
-
-resource "aws_secretsmanager_secret" "admin_temp" {
-  name_prefix             = "${var.name_prefix}-admin-temp-"
-  recovery_window_in_days = 7
-}
-
-resource "aws_secretsmanager_secret_version" "admin_temp" {
-  secret_id     = aws_secretsmanager_secret.admin_temp.id
-  secret_string = random_password.admin_temp.result
-}
-
-# ----------------------------------------------------------------------------
-# Drop Slurm configs + helper scripts into S3 so compute nodes can fetch them.
-# We generate slurm.conf and gres.conf here with the correct partitions.
+# Render Slurm configs and Resume/Suspend scripts; upload to S3 so that
+# login, workflow, and compute nodes can fetch them on bootstrap.
 # ----------------------------------------------------------------------------
 
 locals {
@@ -130,13 +70,12 @@ locals {
   slurm_partitions = join("\n", [
     for family, spec in var.gpu_family_spec :
     format(
-      "PartitionName=%s Nodes=%s-[1-%d] MaxTime=24:00:00 State=UP SuspendTime=%d ResumeTimeout=%d%s",
+      "PartitionName=%s Nodes=%s-[1-%d] MaxTime=24:00:00 State=UP SuspendTime=%d ResumeTimeout=%d",
       spec.partition,
       family,
       lookup(var.gpu_max_nodes, family, 2),
       spec.suspend_time_s,
       spec.resume_timeout_s,
-      startswith(family, "h100") ? " AllowAccounts=h100-approved" : ""
     )
   ])
 
@@ -177,7 +116,6 @@ locals {
 
   gres_conf = "AutoDetect=nvml\n"
 
-  # resume-node.sh generated from template
   resume_script = templatefile("${path.module}/templates/resume-node.sh.tpl", {
     team_name                = var.team_name
     aws_region               = var.aws_region
@@ -195,7 +133,6 @@ locals {
   })
 }
 
-# Upload config artifacts to S3 — compute nodes will fetch these on boot
 resource "aws_s3_object" "slurm_conf" {
   bucket  = var.s3_bucket_name
   key     = "platform/slurm.conf"
@@ -232,31 +169,7 @@ resource "aws_s3_object" "suspend_script" {
 }
 
 # ----------------------------------------------------------------------------
-# Initial admin + team members seed — rendered to JSON and picked up by jobui
-# backend on first start to populate the app_users table
-# ----------------------------------------------------------------------------
-
-locals {
-  users_seed = jsonencode({
-    admin = {
-      email         = var.admin_email
-      temp_password = random_password.admin_temp.result
-    }
-    members = var.team_members
-  })
-}
-
-resource "aws_ssm_parameter" "users_seed" {
-  name  = "/titan-hpc/${var.team_name}/users-seed"
-  type  = "SecureString"
-  value = local.users_seed
-
-  tags = { Name = "${var.name_prefix}-users-seed" }
-}
-
-# ----------------------------------------------------------------------------
-# Head node instance user data — installs everything, pulls configs,
-# starts jobui stack in Docker Compose.
+# Head node user_data — installs Slurm controller, starts slurmctld + slurmdbd
 # ----------------------------------------------------------------------------
 
 locals {
@@ -265,35 +178,15 @@ locals {
     env            = var.env
     aws_region     = var.aws_region
     s3_bucket      = var.s3_bucket_name
-    ecr_registry   = var.ecr_registry_url
     fsx_dns_name   = var.fsx_dns_name
     fsx_mount_name = var.fsx_mount_name
 
-    aurora_endpoint          = var.aurora_writer_endpoint
-    aurora_reader_endpoint   = var.aurora_reader_endpoint
-    aurora_master_secret_arn = "" # master password not needed on head
-    aurora_slurm_secret_arn  = var.aurora_slurm_secret_arn
-    aurora_jobui_secret_arn  = var.aurora_jobui_secret_arn
+    aurora_endpoint         = var.aurora_writer_endpoint
+    aurora_slurm_secret_arn = var.aurora_slurm_secret_arn
 
-    valkey_endpoint = var.valkey_endpoint
-
-    jwt_secret_arn        = aws_secretsmanager_secret.jwt.arn
-    admin_temp_secret_arn = aws_secretsmanager_secret.admin_temp.arn
-    users_seed_parameter  = aws_ssm_parameter.users_seed.name
-    munge_key_parameter   = aws_ssm_parameter.munge_key.name
-
-    admin_email          = var.admin_email
-    jwt_expiry_hours     = var.jwt_expiry_hours
-    default_user_budget  = var.default_user_monthly_budget
-    cors_allowed_origins = var.cors_allowed_origins
-
-    gpu_family_spec_json = jsonencode(var.gpu_family_spec)
+    munge_key_parameter = aws_ssm_parameter.munge_key.name
   })
 }
-
-# ----------------------------------------------------------------------------
-# Head node EC2 instance
-# ----------------------------------------------------------------------------
 
 resource "aws_instance" "head" {
   ami           = data.aws_ami.al2023.id
@@ -301,8 +194,7 @@ resource "aws_instance" "head" {
   subnet_id     = var.subnet_id
 
   vpc_security_group_ids = var.security_group_ids
-
-  iam_instance_profile = var.instance_profile_name
+  iam_instance_profile   = var.instance_profile_name
 
   metadata_options {
     http_endpoint               = "enabled"
@@ -311,7 +203,7 @@ resource "aws_instance" "head" {
   }
 
   root_block_device {
-    volume_size           = 50
+    volume_size           = 30
     volume_type           = "gp3"
     encrypted             = true
     delete_on_termination = true
@@ -324,28 +216,10 @@ resource "aws_instance" "head" {
     Role = "head"
   }
 
-  # ASG not needed — single instance; recreate on config changes
   lifecycle {
     ignore_changes = [ami]
   }
 }
 
-# ----------------------------------------------------------------------------
-# Register with ALB target group
-# ----------------------------------------------------------------------------
-
-resource "aws_lb_target_group_attachment" "head" {
-  count            = var.target_group_arn != "" ? 1 : 0
-  target_group_arn = var.target_group_arn
-  target_id        = aws_instance.head.id
-  port             = 80
-}
-
-# ----------------------------------------------------------------------------
-# Outputs
-# ----------------------------------------------------------------------------
-
 output "instance_id" { value = aws_instance.head.id }
 output "private_ip" { value = aws_instance.head.private_ip }
-output "admin_temp_password_secret_arn" { value = aws_secretsmanager_secret.admin_temp.arn }
-output "jwt_secret_arn" { value = aws_secretsmanager_secret.jwt.arn }

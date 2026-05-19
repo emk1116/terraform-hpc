@@ -1,5 +1,5 @@
 # ============================================================================
-# Core identity — what team is this cluster for, what environment
+# Core identity
 # ============================================================================
 
 variable "team_name" {
@@ -50,38 +50,8 @@ variable "ssh_allowed_cidr" {
   }
 }
 
-variable "alb_allowed_cidrs" {
-  description = "CIDR blocks allowed to reach the ALB (web UI). Default is open to the internet; tighten for prod."
-  type        = list(string)
-  default     = ["0.0.0.0/0"]
-}
-
-variable "acm_certificate_arn" {
-  description = "ARN of an ACM certificate in the same region for the ALB HTTPS listener. Required only when enable_alb=true."
-  type        = string
-  default     = ""
-}
-
-variable "enable_alb" {
-  description = "Whether to deploy the public ALB. Set false to use SSM port-forwarding from a local podman UI to the head node (saves ~$0.55/day and avoids the ACM cert requirement)."
-  type        = bool
-  default     = false
-}
-
-variable "head_node_http_cidrs" {
-  description = "CIDRs allowed to reach the head node API on port 80 directly. Default empty = SSM port-forward only. Add your own /32 if you want direct public access."
-  type        = list(string)
-  default     = []
-}
-
-variable "cors_allowed_origins" {
-  description = "Comma-separated list of origins the backend will accept CORS requests from. For local podman UI use 'http://localhost:3000'. Default '*' allows any origin (no credentials)."
-  type        = string
-  default     = "*"
-}
-
 variable "enable_login_node" {
-  description = "Deploy the SSH login node in a public subnet. Set false if you'll only use SSM Session Manager."
+  description = "Deploy the SSH/SSM login node. Strongly recommended — it's the user's entry point. Set false only if you'll SSM into the head node directly (admin-only)."
   type        = bool
   default     = true
 }
@@ -140,7 +110,7 @@ variable "s3_bucket_force_destroy" {
 }
 
 # ============================================================================
-# Database
+# Database (slurmdbd accounting only)
 # ============================================================================
 
 variable "aurora_min_capacity_acu" {
@@ -150,7 +120,7 @@ variable "aurora_min_capacity_acu" {
 }
 
 variable "aurora_max_capacity_acu" {
-  description = "Aurora Serverless v2 maximum ACU. 4 is plenty for one team with 20 concurrent jobs."
+  description = "Aurora Serverless v2 maximum ACU. 4 is plenty for slurmdbd."
   type        = number
   default     = 4
 }
@@ -162,62 +132,17 @@ variable "aurora_backup_retention_days" {
 }
 
 # ============================================================================
-# Users — the team members who get accounts in jobui
-# ============================================================================
-
-variable "admin_email" {
-  description = "Email of the initial admin user. They'll receive a temp password via terraform output."
-  type        = string
-}
-
-variable "team_members" {
-  description = <<-EOT
-    List of team members to pre-provision in the jobui database. Each member becomes an app_users row.
-    Admins can add more later via the UI. H100-approved members can use the H100 partitions.
-
-    Example:
-      team_members = [
-        {
-          username          = "alice"
-          email             = "alice@example.com"
-          display_name      = "Alice Example"
-          role              = "admin"
-          h100_approved     = true
-          monthly_budget_usd = 2000
-        },
-        {
-          username          = "bob"
-          email             = "bob@example.com"
-          display_name      = "Bob Example"
-          role              = "member"
-          h100_approved     = false
-          monthly_budget_usd = 500
-        },
-      ]
-  EOT
-  type = list(object({
-    username           = string
-    email              = string
-    display_name       = string
-    role               = string
-    h100_approved      = bool
-    monthly_budget_usd = number
-  }))
-  default = []
-}
-
-# ============================================================================
-# Head / login node sizing
+# Head / login / workflow node sizing
 # ============================================================================
 
 variable "head_node_instance_type" {
-  description = "Head node size. t3.medium handles 20 concurrent jobs; bump to t3.large for more."
+  description = "Head node size. t3.small handles slurmctld + slurmdbd comfortably; bump if you have many compute nodes."
   type        = string
-  default     = "t3.medium"
+  default     = "t3.small"
 }
 
 variable "login_node_instance_type" {
-  description = "Login node size. t3.small is plenty for SSH + job submission."
+  description = "Login node size. t3.small is plenty for SSH + sbatch + light interactive work."
   type        = string
   default     = "t3.small"
 }
@@ -235,33 +160,16 @@ variable "workflow_node_instance_type" {
 }
 
 # ============================================================================
-# jobui configuration
+# Cost guardrails — AWS Budgets only sends email alerts; doesn't enforce
 # ============================================================================
 
-variable "jobui_image_tag" {
-  description = "Docker image tag for the jobui backend + frontend. 'latest' for dev, pinned SHA for prod."
+variable "admin_email" {
+  description = "Email of the cluster admin. Receives AWS Budgets alerts."
   type        = string
-  default     = "latest"
 }
-
-variable "jwt_expiry_hours" {
-  description = "JWT token lifetime in hours."
-  type        = number
-  default     = 8
-}
-
-# ============================================================================
-# Cost guardrails
-# ============================================================================
 
 variable "team_monthly_budget_usd" {
-  description = "Soft budget alarm for the whole team. AWS Budgets sends an email when crossed."
+  description = "Soft budget alarm for the whole team. AWS Budgets sends email when crossed."
   type        = number
-  default     = 5000
-}
-
-variable "default_user_monthly_budget_usd" {
-  description = "Default monthly GPU spend budget per new user created via the UI."
-  type        = number
-  default     = 500
+  default     = 100
 }
