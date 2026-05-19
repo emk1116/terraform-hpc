@@ -12,69 +12,119 @@ Enhanced fork of [`emk1116/terraform-hpc`](https://github.com/emk1116/terraform-
 
 ## Topology
 
-This stack supports **two UI deployment modes** that share the same backend.
-Use the laptop-podman mode for testing and development; use the Fargate mode
-for production team access.
+The platform separates **stateless web services** (jobui frontend + backend)
+from **stateful HPC control plane** (Slurm controllers) and **compute**
+(autoscaled GPU nodes). Web services run on Fargate so they can scale, deploy,
+and restart independently of the Slurm controller. The head node is reduced
+to its core job — running `slurmctld` + `slurmdbd` — and never serves web
+traffic.
 
-### Production: UI on AWS Fargate (the target topology)
+Two deployment modes share the same AWS backend. Use the **laptop-podman**
+mode for development and end-to-end testing; use the **Fargate** mode for
+team access.
 
-```
-                        ┌─────────────────────────────────────────────────────┐
-                        │  AWS VPC                                            │
-   internet             │                                                     │
-       │                │   public subnets                                    │
-       ▼                │   ┌──────────┐   ┌──────────────────────────────┐   │
-  https://ui.team       │   │   ALB    │──►│  Fargate task                │   │
-       │  (ACM cert)    │   │  :443    │   │  nginx + React SPA           │   │
-       └────────────────┼──►│          │   │  reverse-proxies /api/* ─────┼─► │ ──┐
-                        │   └──────────┘   └──────────────────────────────┘   │   │
-                        │                                                     │   │
-                        │   private subnets                                   │   │
-                        │   ┌────────────────────────────────────────────┐    │   │
-                        │   │  head node ◄──────────────────────────────┘    │
-                        │   │   slurmctld + slurmdbd + jobui-backend (8000)  │
-                        │   │                                                │
-                        │   ├── workflow node (Snakemake → sbatch)           │
-                        │   ├── login node (SSH, optional)                   │
-                        │   ├── Aurora Serverless v2 (mysql)                 │
-                        │   ├── Valkey Serverless (cache)                    │
-                        │   ├── FSx Lustre 1.2 TiB (/fsx)                    │
-                        │   └── compute fleet (T4/L4/A10G/A100/H100)         │
-                        │           └── autoscaled by Slurm Power Save       │
-                        └─────────────────────────────────────────────────────┘
-```
-
-- **Fargate** runs the React SPA in an nginx container. The frontend itself
-  serves static assets and reverse-proxies `/api/*` to the head node's port 80
-  via private VPC routing — the head node never has public ingress.
-- **ALB** terminates TLS for the Fargate target group. Requires an ACM cert
-  in the same region.
-- Set `enable_alb = true` and `enable_ui_fargate = true` in `terraform.tfvars`.
-
-> Status: the Fargate module is a planned addition. Until then, the
-> laptop-podman path below works as a stand-in and is what TEST_PLAN.md
-> assumes. Track progress in [TODO](#roadmap--known-gaps) below.
-
-### Testing / development: UI on your laptop via podman
+### Production: jobui frontend + backend on Fargate (target topology)
 
 ```
-┌───────────────┐  aws ssm   ┌──────────────────────────────────────────────┐
-│  Your laptop  │  port-fwd  │  AWS VPC (private)                           │
-│               │ ─────────► │                                              │
-│ podman UI:3000│            │  head node (slurmctld, slurmdbd, jobui)      │
-│  └─/api/* ────┘            │     │                                        │
-│                            │     ├── workflow node (Snakemake, sbatch)    │
-│                            │     ├── login node (SSH, optional)           │
-│                            │     ├── Aurora / Valkey / FSx                │
-│                            │     └── compute fleet (autoscaled)           │
-└───────────────┘            └──────────────────────────────────────────────┘
+                          ┌──────────────────────────────────────────────────┐
+                          │  AWS VPC                                         │
+    internet              │                                                  │
+        │                 │   public subnets                                 │
+        ▼                 │   ┌──────────┐                                   │
+   https://ui.team        │   │   ALB    │                                   │
+        │  (ACM cert)     │   │  :443    │                                   │
+        └─────────────────┼──►│          │                                   │
+                          │   └────┬─────┘                                   │
+                          │        │                                         │
+                          │   private subnets                                │
+                          │        │                                         │
+                          │   ┌────▼──────────────────────────────────────┐  │
+                          │   │  Fargate task — jobui                     │  │
+                          │   │   nginx :80  ─→  serves SPA               │  │
+                          │   │     │                                     │  │
+                          │   │     └─/api/*─→  FastAPI :8000             │  │
+                          │   │                  • sbatch / squeue / sacct│  │
+                          │   │                    (munge + slurm.conf,   │  │
+                          │   │                     →  head node :6817)   │  │
+                          │   │                  • Aurora :3306           │  │
+                          │   │                  • Valkey :6379           │  │
+                          │   │                  • S3 (uploads, logs)     │  │
+                          │   └───────────────┬───────────────────────────┘  │
+                          │                   │ port 6817 (slurmctld)        │
+                          │   ┌───────────────▼───────────────────────────┐  │
+                          │   │  head node — slurmctld + slurmdbd only    │  │
+                          │   │     no web server, no Docker compose      │  │
+                          │   └─────────┬─────────────────────────────────┘  │
+                          │             │                                    │
+                          │   ┌─────────▼─────────┬──────────────────────┐   │
+                          │   │ workflow node     │ compute fleet        │   │
+                          │   │  Snakemake →      │  T4/L4/A10G/         │   │
+                          │   │  sbatch           │  A100/H100           │   │
+                          │   └───────────────────┴──────────────────────┘   │
+                          │                                                  │
+                          │   shared services                                │
+                          │   ┌────────────┬───────────┬─────────────────┐   │
+                          │   │ Aurora v2  │ Valkey    │ FSx Lustre /fsx │   │
+                          │   └────────────┴───────────┴─────────────────┘   │
+                          └──────────────────────────────────────────────────┘
 ```
 
-A local podman container serves the React SPA on `localhost:3000`; its nginx
-reverse-proxies `/api/*` to an `aws ssm start-session` port-forward at
-`localhost:8080`. **No ALB, no ACM cert, no public ingress.** This is the
-default `terraform.tfvars.example` config and the topology used throughout
+- **ALB** terminates TLS; the only public-facing component. Requires an ACM
+  cert in the same region.
+- **Fargate task** runs **two containers** in one task definition:
+  - `nginx` — serves the React SPA build, reverse-proxies `/api/*` to
+    `localhost:8000` inside the same task
+  - `jobui-backend` — FastAPI + Slurm CLI + munge daemon. Submits jobs into
+    the cluster via `sbatch` over TCP :6817 to the head node, authenticated
+    with the same munge key the cluster uses (fetched from SSM at task start).
+- **Head node** is **simplified** in this mode: it only runs `slurmctld` and
+  `slurmdbd` and uploads `slurm.conf` + the Slurm client tarball to S3 so
+  the Fargate task can fetch them at startup. No more nginx, no jobui stack,
+  no Docker Compose on the head node.
+- **FSx access**: Fargate **cannot mount FSx Lustre** (AWS limitation). The
+  backend reads live logs by tailing `/fsx/work/<u>/<j>/slurm.log` *only*
+  when running in laptop-test mode (which mounts FSx via the head node).
+  In Fargate mode, the backend reads logs from the S3 archive that the job
+  script writes when it exits — this means **live logs are only available
+  after job completion**. See [Roadmap](#roadmap--known-gaps) for the
+  EFS-backed log fanout option.
+
+Set `enable_alb = true` and `enable_jobui_fargate = true` in
+`terraform.tfvars` to opt in once the module ships.
+
+> Status: the Fargate module for jobui (frontend + backend together) is a
+> planned addition. Until then, the laptop-podman path below carries the
+> backend itself, and TEST_PLAN.md assumes that mode. Track progress in
+> [Roadmap](#roadmap--known-gaps) below.
+
+### Testing / development: laptop podman runs frontend + backend
+
+```
+┌─────────────────────────┐  3× aws ssm  ┌─────────────────────────────────┐
+│  Your laptop            │  port-fwds   │  AWS VPC (private)              │
+│                         │ ───────────► │                                 │
+│ podman frontend :3000   │              │  head node                      │
+│   └─ /api/* ──────────┐ │              │   slurmctld + slurmdbd          │
+│                       │ │              │     :6817 ◄──── (sbatch tunnel) │
+│ podman backend :8000  ◄┘ │              │                                 │
+│   ├─ sbatch ──────────────────────────►│   workflow node ─ sbatch        │
+│   ├─ Aurora :3306 ────────────────────►│   Aurora :3306                  │
+│   └─ Valkey :6379 ────────────────────►│   Valkey :6379                  │
+│                         │              │   FSx Lustre (head node only)   │
+└─────────────────────────┘              │   compute fleet (autoscaled)    │
+                                         └─────────────────────────────────┘
+```
+
+Local podman runs **both** the frontend and backend containers — the same
+images that ship to Fargate in production. The backend opens three SSM
+port-forwards to reach Slurm (`:6817`), Aurora (`:3306`), and Valkey (`:6379`)
+inside the VPC. **No ALB, no ACM cert, no public ingress.** This is the
+default config in `terraform.tfvars.example` and the topology used in
 [TEST_PLAN.md](TEST_PLAN.md).
+
+> Live FSx log tailing is available in this mode only if you also forward
+> the head node's log directory via SSM (the head node still mounts FSx in
+> both modes). Otherwise, completed-job logs are read from the S3 archive.
 
 ## What's different from the base repo
 
@@ -83,7 +133,7 @@ default `terraform.tfvars.example` config and the topology used throughout
 | GPU support | CPU-only `t3.micro` | 6 partitions: T4, A10G, L4, A100, 1×H100, 8×H100 |
 | Database | MariaDB on head node | **Aurora Serverless v2 MySQL** (single AZ) |
 | Cache | None | **Valkey Serverless** (ElastiCache) |
-| UI access | Public web | **Fargate behind ALB** for prod; **local podman + SSM** for testing |
+| UI + backend hosting | Both on head node | **Fargate task** (nginx + FastAPI) for prod; **local podman** for testing. Head node runs only Slurm. |
 | Workflow engine | None | **Workflow node** with Snakemake + Slurm executor |
 | Upload limit | 500 MB via nginx | **Direct-to-S3 multipart**, 10 GB+ |
 | Models | N/A | Catalog in Aurora with GPU-memory filtering |
@@ -94,29 +144,33 @@ default `terraform.tfvars.example` config and the topology used throughout
 
 ## Components
 
-- **Network** — VPC with public subnets (NAT + login node + optional ALB/Fargate) and private subnets (head node, workflow node, Aurora, Valkey, compute). Default deployment AZ is **us-east-1f**.
-- **Head node** — `slurmctld`, `slurmdbd`, FastAPI backend, and (in laptop-podman mode) the nginx that serves the SPA. Reachable via SSM Session Manager. With Fargate mode, the SPA moves off the head node and only the backend stays there.
-- **Fargate UI service** *(planned)* — public-facing ALB → Fargate task running the React SPA in nginx. nginx forwards `/api/*` to the head node over the VPC. No SSH/SSM required for end users.
+- **Network** — VPC with public subnets (NAT + ALB + Fargate ENIs + login node) and private subnets (head node, workflow node, Aurora, Valkey, compute, Fargate). Default deployment AZ is **us-east-1f**.
+- **ALB** *(optional)* — public-facing, TLS-terminating. Forwards everything to the jobui Fargate task. Required for the Fargate deployment mode.
+- **jobui Fargate service** *(planned)* — single ECS task definition with two containers:
+  - `nginx` — serves the SPA build, reverse-proxies `/api/*` to `localhost:8000`
+  - `jobui-backend` — FastAPI + Slurm CLI + munge daemon; submits to head node `slurmctld` over TCP. Fetches `slurm.conf` and Slurm binaries from S3 (uploaded by head node at boot) and the munge key from SSM Parameter Store.
+- **Head node** — `slurmctld` + `slurmdbd` **only** in Fargate mode. No more web server, no jobui Docker stack. Still uploads platform artifacts (slurm.conf, slurm-client tarball, resume/suspend scripts) to S3 so Fargate tasks, workflow nodes, and compute nodes can fetch them.
 - **Workflow node** — t3.small with Snakemake + Slurm executor plugin preinstalled. Submits DAG jobs into the cluster. Toggle with `enable_workflow_node`.
 - **Login node** — t3.small in a public subnet for SSH access. Toggle with `enable_login_node`.
 - **Aurora Serverless v2** — two databases: `slurm_acct_db` (slurmdbd) and `jobui` (app).
 - **Valkey Serverless** — session tokens, rate limiting, queue status cache.
-- **FSx Lustre SCRATCH_2** — `/fsx/models/<m>/` weights, `/fsx/work/<u>/<job>/` scratch, `/fsx/shared/` for workflows.
+- **FSx Lustre SCRATCH_2** — `/fsx/models/<m>/` weights, `/fsx/work/<u>/<job>/` scratch, `/fsx/shared/` for workflows. Mounted by head, workflow, and compute nodes. **Not mounted by Fargate** — see Roadmap for the EFS-or-sidecar plan to expose live FSx logs to the Fargate backend.
 - **GPU compute fleet** — 6 launch templates (one per family), DLAMI base, autoscales 0→N via Slurm Resume/SuspendProgram with per-partition timing.
-- **S3** — data bucket with per-user prefixes, versioned, encrypted, no public access.
-- **ECR** — per-team repositories for model images, plus the frontend image when Fargate mode is enabled.
+- **S3** — data bucket with per-user prefixes, versioned, encrypted, no public access. Also hosts the slurm.conf + slurm-client tarball that Fargate tasks pull at startup, and the completed-job log archives.
+- **ECR** — per-team repositories for model images, plus `jobui/frontend` and `jobui/backend` images when Fargate mode is enabled.
 
 ## Submit flow (UI)
 
-1. Browser → ALB → Fargate nginx → head node FastAPI (prod), or Browser → podman nginx → SSM tunnel → head node FastAPI (testing). Either way: `POST /api/uploads/init` returns presigned S3 multipart URLs
-2. Browser uploads file directly to S3 in 8 MB chunks, in parallel (cancellable)
-3. Browser: `POST /api/uploads/complete` — multipart merge, ETag stored as content_sha256
-4. User picks GPU family + count + model + runtime → FastAPI validates budget, estimates cost, writes `jobs` row, shells out to `sbatch`
-5. Slurm queues job; `ResumeProgram` picks launch template by GPU family and calls `ec2:RunInstances`. H100 retries across AZs on `InsufficientInstanceCapacity`.
-6. Compute node boots from DLAMI, mounts FSx, registers with Slurm
-7. Job script: `s5cmd cp` S3→FSx → `docker run --gpus all` with `--gres=gpu:<family>:<count>` → `s5cmd cp` results FSx→S3 → log archive → scratch cleanup
-8. `slurmdbd` flushes accounting to Aurora; hourly cron rolls into `jobui.monthly_spend`
-9. `SuspendProgram` terminates node after the per-partition `SuspendTime`
+1. Browser → ALB → Fargate `nginx` → Fargate `jobui-backend` (same task, `localhost:8000`). In testing mode: Browser → podman nginx → podman backend on the laptop.
+2. `POST /api/uploads/init` returns presigned S3 multipart URLs; browser uploads file directly to S3 in 8 MB chunks (cancellable).
+3. `POST /api/uploads/complete` — multipart merge, ETag stored as `content_sha256`.
+4. User picks GPU family + count + model + runtime. FastAPI validates budget against Aurora, estimates cost, writes `jobs` row, then **shells out to `sbatch`**. The Fargate backend has a local munge daemon (same key as the cluster) and an embedded `slurm.conf` pointing at the head node's `slurmctld`. The sbatch traffic is plain Slurm RPC over TCP :6817, authenticated with munge.
+5. Slurm queues the job; `ResumeProgram` picks the launch template by GPU family and calls `ec2:RunInstances`. H100 retries across AZs on `InsufficientInstanceCapacity`.
+6. Compute node boots from DLAMI, mounts FSx, registers with Slurm.
+7. Job script: `s5cmd cp` S3→FSx → `docker run --gpus all` with `--gres=gpu:<family>:<count>` → `s5cmd cp` results FSx→S3 → log archive to `s3://.../logs/<u>/<job>/slurm.log` → scratch cleanup.
+8. `slurmdbd` flushes accounting to Aurora; hourly cron rolls into `jobui.monthly_spend`.
+9. `SuspendProgram` terminates the node after the per-partition `SuspendTime`.
+10. When the user opens the job detail page, the Fargate backend reads `log_tail` from the S3 archive (the FSx scratch dir is already cleaned up by then). For *running* jobs the live log is only available in laptop-test mode.
 
 ## Snakemake / workflow flow
 
@@ -185,30 +239,34 @@ bash /tmp/admin-pwd.sh
 bash scripts/destroy.sh terraform.tfvars
 ```
 
-## Production deployment (UI on Fargate)
+## Production deployment (jobui on Fargate)
 
 Once the laptop-podman path is validated and you're ready to expose the UI
 to teammates, flip these toggles in `terraform.tfvars`:
 
 ```hcl
-enable_alb           = true
-enable_ui_fargate    = true                # planned; see Roadmap
-acm_certificate_arn  = "arn:aws:acm:us-east-1:...:certificate/..."
-cors_allowed_origins = "https://your-team-ui.example.com"
+enable_alb            = true
+enable_jobui_fargate  = true                # planned; see Roadmap
+acm_certificate_arn   = "arn:aws:acm:us-east-1:...:certificate/..."
+cors_allowed_origins  = "https://your-team-ui.example.com"
 ```
 
 What changes:
 - A public **ALB** terminates HTTPS at your hostname
-- A **Fargate service** runs the frontend container (built from
-  `jobui/frontend/Dockerfile`, pushed to ECR by your CI or by `aws ecr ...`
-  one-off)
-- The Fargate nginx reverse-proxies `/api/*` to the head node over private
-  VPC routing
-- Users open `https://your-team-ui.example.com` — no SSM, no podman, no SSH
-- The head node still has no public ingress
+- A **Fargate task** runs two containers in one task definition:
+  - `nginx` (from `jobui/frontend/Dockerfile`) — SPA + `/api/*` reverse-proxy
+  - `jobui-backend` (from `jobui/backend/Dockerfile`) — FastAPI + Slurm CLI + munge
+- The Fargate task fetches `slurm.conf` and the Slurm client binaries from S3
+  on startup (uploaded by the head node) and the munge key from SSM Parameter
+  Store. Its security group allows egress to head node `:6817` and to Aurora/Valkey.
+- **The head node loses its web stack** — no more nginx, no jobui Docker
+  compose. Just `slurmctld` + `slurmdbd`. The bootstrap script gets ~200
+  lines lighter.
+- Users open `https://your-team-ui.example.com` — no SSM, no podman, no SSH.
+- The head node still has no public ingress.
 
-Add-on monthly cost over the laptop-test baseline: ~$0.85/day (ALB + 1 small
-Fargate task at 0.25 vCPU / 0.5 GB). The laptop path remains useful for
+Add-on cost over the laptop-test baseline: ~$1.20/day (ALB ~$0.54 + 1 small
+Fargate task at 0.5 vCPU / 1 GB ~$0.65). The laptop path remains useful for
 debugging and CI integration tests.
 
 ## Cost model
@@ -226,9 +284,13 @@ debugging and CI integration tests.
 | NAT Gateway | $0.045 | $1.08 |
 | VPC interface endpoints ×8 | $0.08 | $1.92 |
 | ALB (only if `enable_alb=true`) | $0.0225 | $0.54 |
-| Fargate UI task 0.25 vCPU/0.5 GB (only if `enable_ui_fargate=true`) | $0.0123 | $0.30 |
+| Fargate jobui task 0.5 vCPU / 1 GB (only if `enable_jobui_fargate=true`) | $0.0271 | $0.65 |
 | **Baseline (laptop-test mode — ALB+Fargate off)** | **~$0.44/hr** | **~$10.50/day** |
-| **Baseline (production mode — ALB + Fargate on)** | **~$0.47/hr** | **~$11.30/day** |
+| **Baseline (production mode — ALB + Fargate on)** | **~$0.49/hr** | **~$11.70/day** |
+
+In production mode, the head node typically drops to `t3.small` (no jobui
+stack to run); the slurmctld + slurmdbd workload is light. That saves another
+~$0.50/day, mostly offsetting the Fargate task cost.
 
 Plus GPU-hour costs only while compute nodes run (autoscales to 0 when idle).
 
@@ -240,7 +302,11 @@ sessions of mixed CPU / GPU / Snakemake / failure-path scenarios.
 
 | Item | State | Notes |
 |---|---|---|
-| `modules/ui-fargate/` | **Not yet written** | ECS Fargate cluster + service + task definition that runs `jobui/frontend` behind the existing ALB. Until this lands, the production path requires manually deploying the frontend image to ECS or sticking with the laptop-podman path. |
+| `modules/jobui-fargate/` | **Not yet written** | ECS cluster + task definition with two containers (`nginx` for SPA + `jobui-backend` for FastAPI) + service + target group on the ALB. Requires both `jobui/frontend` and `jobui/backend` images to be pushed to ECR. Backend container needs `slurm-client`, `munge`, and AWS CLI installed. |
+| Head-node simplification when Fargate is on | **Not yet written** | When `enable_jobui_fargate = true`, the head-node user_data should skip steps 2 (slurm build is fine), 4–6 (still needed for slurmctld/slurmdbd), but drop 8–11 (no jobui docker compose, no nginx). Head node instance can also downsize to t3.small. |
+| Slurm RPC ingress on head node | **Needs SG change** | Currently `head_node_sg` only allows `6817-6819` from inside the VPC. The Fargate task ENI lands in the VPC private subnets so this already works, but the SG rule should be tightened to allow `6817` specifically from the Fargate SG. |
+| FSx live-log access from Fargate | **Open** | Fargate cannot mount FSx Lustre. Options: (a) sidecar HTTP server on head node serving `/fsx/work/**/slurm.log` to the backend SG only; (b) EFS volume mounted on both compute nodes and Fargate, with logs tee'd to EFS; (c) accept S3-only logs (live = unavailable, completed = OK). |
+| Munge key distribution to Fargate | **Pattern exists** | Workflow + compute nodes already fetch the key from SSM Parameter Store at startup. The Fargate task definition just needs the same IAM permission and an entrypoint that fetches the key and starts `munged` before the FastAPI process. |
 | Slurm MIG GRES integration | Not wired | H100/A100 MIG slices can be configured manually on the compute node (see [TEST_PLAN.md](TEST_PLAN.md) §Scenario 6). Full automation would add a `gres.conf` template per-MIG-profile and a new `gpu_family_spec` entry. |
 | CPU compute partition | Not wired | All test jobs currently run on T4/L4 nodes with `--gres=gpu:t4:0` as a workaround. A real CPU partition would need a non-DLAMI launch template branch in `modules/compute-fleet`. |
 | Frontend dead code | Cosmetic | `pages/SubmitJob.jsx`, `pages/Dashboard.jsx`, `api/*.js`, `hooks/*.js`, `components/*.jsx` are leftovers; safe to delete. |
@@ -262,16 +328,16 @@ sessions of mixed CPU / GPU / Snakemake / failure-path scenarios.
 │   ├── aurora/                      # Serverless v2 MySQL
 │   ├── valkey/                      # ElastiCache Serverless
 │   ├── fsx/                         # Lustre SCRATCH_2
-│   ├── alb/                         # optional public ALB (for Fargate UI)
-│   ├── head-node/                   # slurmctld + slurmdbd + jobui backend
+│   ├── alb/                         # optional public ALB (for Fargate jobui)
+│   ├── head-node/                   # slurmctld + slurmdbd (in Fargate mode: nothing else)
 │   ├── login-node/                  # optional SSH entry
 │   ├── workflow-node/               # Snakemake / Nextflow runner
 │   ├── compute-fleet/               # GPU launch templates per family
-│   └── (ui-fargate/)                # planned — ECS Fargate frontend service
+│   └── (jobui-fargate/)             # planned — ECS Fargate task: nginx + jobui-backend
 ├── jobui/
-│   ├── backend/                     # FastAPI + SQLAlchemy + Alembic
-│   └── frontend/                    # React + Vite SPA (deploys to Fargate or local podman)
-├── local-ui/                        # podman-compose for laptop testing path
+│   ├── backend/                     # FastAPI + SQLAlchemy + Alembic (deploys to Fargate)
+│   └── frontend/                    # React + Vite SPA (deploys to Fargate as nginx sidecar)
+├── local-ui/                        # podman-compose: both frontend + backend on laptop
 ├── examples/
 │   ├── evo2-inference-container/    # reference Docker model contract
 │   └── snakemake-demo/              # 3-rule fan-out pipeline
