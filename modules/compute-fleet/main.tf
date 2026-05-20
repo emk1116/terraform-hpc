@@ -13,8 +13,8 @@ variable "ecr_registry_url" { type = string }
 variable "s3_bucket_name" { type = string }
 
 # ----------------------------------------------------------------------------
-# AMI — AWS Deep Learning AMI GPU (Amazon Linux 2023) — NVIDIA drivers,
-# Docker, NVIDIA Container Toolkit, CUDA all preinstalled.
+# AMIs — DLAMI for GPU families (NVIDIA drivers + Docker + NVIDIA Container
+# Toolkit + CUDA preinstalled), plain AL2023 for CPU families.
 # ----------------------------------------------------------------------------
 
 data "aws_ami" "dlami" {
@@ -34,6 +34,16 @@ data "aws_ami" "dlami" {
   filter {
     name   = "virtualization-type"
     values = ["hvm"]
+  }
+}
+
+data "aws_ami" "al2023" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["al2023-ami-2023.*-x86_64"]
   }
 }
 
@@ -142,6 +152,35 @@ locals {
     fi
 
     # ------------------------------------------------------------------------
+    # 5b. MIG configuration — only for the h100-mig family.
+    # Enable MIG mode on every GPU and create 7 × 1g.10gb slices each.
+    # GI profile 19 == 1g.10gb on H100.
+    # ------------------------------------------------------------------------
+    if [[ "$NODE_NAME" == h100-mig-* ]] && command -v nvidia-smi >/dev/null 2>&1; then
+      echo "[$(date)] enabling MIG mode and creating 7×1g.10gb slices"
+      nvidia-smi -mig 1 || true
+      sleep 5
+      # Wipe any pre-existing partitioning, then create 7 GIs (1g.10gb each)
+      nvidia-smi mig -dci || true
+      nvidia-smi mig -dgi || true
+      nvidia-smi mig -cgi 19,19,19,19,19,19,19 -C || true
+      nvidia-smi -L
+    fi
+
+    # ------------------------------------------------------------------------
+    # 5c. DCGM exporter (GPU families only) — Prometheus metrics on :9400
+    # ------------------------------------------------------------------------
+    if command -v nvidia-smi >/dev/null 2>&1; then
+      docker rm -f dcgm-exporter 2>/dev/null || true
+      docker run -d --restart=always \
+        --gpus all --cap-add SYS_ADMIN \
+        --name dcgm-exporter \
+        -p 9400:9400 \
+        nvcr.io/nvidia/k8s/dcgm-exporter:3.3.5-3.4.0-ubuntu22.04 || \
+        echo "[$(date)] WARN: DCGM exporter failed to start (continuing)"
+    fi
+
+    # ------------------------------------------------------------------------
     # 6. Fetch Munge key from SSM Parameter Store (set by head node)
     # ------------------------------------------------------------------------
     MUNGE_KEY=$(aws ssm get-parameter --region $REGION \
@@ -182,7 +221,7 @@ resource "aws_launch_template" "per_gpu" {
   for_each = var.active_gpus
 
   name_prefix            = "${var.name_prefix}-compute-${each.key}-"
-  image_id               = data.aws_ami.dlami.id
+  image_id               = each.value.gpus_per_node > 0 ? data.aws_ami.dlami.id : data.aws_ami.al2023.id
   instance_type          = each.value.instance_type
   vpc_security_group_ids = var.security_group_ids
 

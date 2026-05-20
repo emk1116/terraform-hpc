@@ -31,13 +31,14 @@ run `sbatch` / `snakemake` directly. The optional jobui in
 
 | Scenario | Instance | Duration | Cost |
 |---|---|---|---|
-| 1. Cluster smoke (CLI from login node) | already running | 2 min | $0.00 |
+| 1. CPU job (real `cpu` partition) | `c5.large` | ~3 min + ~2 min boot | $0.01 |
 | 2. Single T4 GPU job | `g4dn.xlarge` | ~5 min + ~3 min boot | $0.07 |
 | 3. 5×T4 queue test | `g4dn.xlarge` ×5 | ~10 min + boot | $0.30 |
 | 4. Snakemake fan-out (5 chunks, T4) | `g4dn.xlarge` ×5 | ~10 min + boot | $0.30 |
 | 5. L4 single-GPU smoke | `g6.xlarge` | ~5 min + boot | $0.11 |
-| 6. MIG demo (H100, optional, requires quota) | `p5.4xlarge` | ~15 min + boot | $4.00 |
-| **Total scenarios 1–5** | | | **~$0.78** |
+| 6. Telemetry check (Prometheus) | already running | 5 min | $0.00 |
+| 7. H100 MIG (7 slices, requires quota) | `p5.4xlarge` | ~15 min + boot | $4.00 |
+| **Total scenarios 1–6** | | | **~$0.79** |
 
 ### 1c. Per session
 
@@ -102,19 +103,43 @@ squeue                                              # empty
 
 ## 4. Test scenarios
 
-### Scenario 1 — Cluster smoke (free)
+### Scenario 1 — CPU job (real `cpu` partition)
 
-Validates login node has a working Slurm client and can reach slurmctld.
+Validates the login node's Slurm client, the CPU partition (c5.large on
+AL2023, no GPU), and autoscaling of a non-GPU node.
 
 ```bash
 bash /tmp/login-ssm.sh
 # On login node:
-sinfo
-sbatch jobs/fsx_smoke_test.sh    # if you've staged it, or:
+sinfo                     # should list: cpu, gpu-t4, gpu-l4 partitions
 
-cat > /tmp/cluster-smoke.sh <<'EOF'
+cat > /tmp/cpu-smoke.sh <<'EOF'
 #!/bin/bash
-#SBATCH --job-name=smoke
+#SBATCH --job-name=cpu-smoke
+#SBATCH --partition=cpu
+#SBATCH --time=00:05:00
+#SBATCH --cpus-per-task=2
+#SBATCH --output=/fsx/work/%u/%j/out.log
+mkdir -p /fsx/work/$USER/$SLURM_JOB_ID
+echo "hostname: $(hostname)"
+echo "cpus: $(nproc)"
+echo "fsx mount: $(mountpoint /fsx)"
+echo "s3 reachable: $(aws s3 ls s3:// 2>&1 | head -1)"
+EOF
+sbatch /tmp/cpu-smoke.sh
+squeue -u $USER
+```
+
+**Cost**: ~$0.01 (one c5.large boot). **Pass**: `sacct -j <id>` shows `COMPLETED`; `/fsx/work/$USER/<id>/out.log` shows 2 CPUs, no GPU. A `cpu-1` node appears in `sinfo` then suspends after 300s idle.
+
+### Scenario 2 — Single GPU job (T4)
+
+```bash
+bash /tmp/login-ssm.sh
+# On login node — define a reusable GPU smoke script:
+cat > /tmp/gpu-smoke.sh <<'EOF'
+#!/bin/bash
+#SBATCH --job-name=gpu-smoke
 #SBATCH --partition=gpu-t4
 #SBATCH --time=00:05:00
 #SBATCH --gres=gpu:t4:1
@@ -122,18 +147,12 @@ cat > /tmp/cluster-smoke.sh <<'EOF'
 mkdir -p /fsx/work/$USER/$SLURM_JOB_ID
 echo "hostname: $(hostname)"
 nvidia-smi
-echo "fsx mount: $(mountpoint /fsx)"
-echo "s3 reachable: $(aws s3 ls s3:// 2>&1 | head -1)"
 EOF
-sbatch /tmp/cluster-smoke.sh
+sbatch /tmp/gpu-smoke.sh
 squeue -u $USER
 ```
 
-**Cost**: ~$0.07 (one T4 boot). **Pass**: `sacct -j <id>` shows `COMPLETED`; `/fsx/work/$USER/<id>/out.log` shows GPU info.
-
-### Scenario 2 — Single GPU inference (T4)
-
-Stage an input file to S3, run an inference container against it. See `jobs/inference_job.sh.tpl` as the reference. **Cost**: ~$0.07.
+**Cost**: ~$0.07. **Pass**: `sacct -j <id>` shows `COMPLETED`; out.log shows the T4. For a real inference run with a container, see `jobs/inference_job.sh.tpl`.
 
 ### Scenario 3 — Multi-job queue (5×T4) — autoscale stress
 
@@ -141,7 +160,7 @@ Stage an input file to S3, run an inference container against it. See `jobs/infe
 bash /tmp/login-ssm.sh
 # On login node:
 for i in 1 2 3 4 5; do
-    sbatch /tmp/cluster-smoke.sh
+    sbatch /tmp/gpu-smoke.sh
 done
 watch -n 2 'squeue; echo; sinfo'
 ```
@@ -172,22 +191,55 @@ snakemake --profile slurm --jobs 5
 ```bash
 bash /tmp/login-ssm.sh
 # On login node — submit to gpu-l4 partition
-sed 's/gpu-t4/gpu-l4/; s/gpu:t4:1/gpu:l4:1/' /tmp/cluster-smoke.sh > /tmp/l4-smoke.sh
+sed 's/gpu-t4/gpu-l4/; s/gpu:t4:1/gpu:l4:1/' /tmp/gpu-smoke.sh > /tmp/l4-smoke.sh
 sbatch /tmp/l4-smoke.sh
 ```
 
 **Pass**: `resume-node.sh` launches a `g6.xlarge` in the L4 partition. **Cost**: ~$0.11.
 
-### Scenario 6 — H100 MIG demo (optional, requires quota)
+### Scenario 6 — Telemetry (free)
 
-Same as before — but uses Slurm `scontrol resume` to power up the H100 node,
-then SSM into the compute node and manually enable MIG. See repository
-README §Roadmap for the future automated MIG GRES integration. **Cost**: ~$4 (p5.4xlarge × ~15 min).
+```bash
+# From your laptop — port-forward Prometheus off the head node
+$(terraform output -raw prometheus_port_forward_command)
+# Open http://localhost:9090 and run queries:
+#   up                          → slurm + dcgm targets healthy
+#   slurm_nodes_idle            → idle node count
+#   slurm_queue_pending         → pending jobs
+#   DCGM_FI_DEV_GPU_UTIL        → live GPU utilization (when a GPU job runs)
+```
 
-### Scenario 7 — Failure paths (free)
+Run this while Scenario 3 is in flight to watch GPU utilization climb.
+**Pass**: Prometheus `/targets` shows the slurm-exporter (`localhost:8080`) UP and one DCGM target per running GPU node.
 
-- **Cancelled job**: `scancel <id>` mid-run. Verify scratch cleanup cron on head node removes the orphaned `/fsx/work/$USER/<id>` dir after 7 days (or run the cron manually: `sudo /etc/cron.daily/titan-scratch-cleanup`).
-- **Bad partition**: `sbatch --partition=nonexistent /tmp/cluster-smoke.sh` — should fail at submit time with a clear error.
+### Scenario 7 — H100 MIG (requires H100 quota)
+
+```bash
+# 1. Enable the h100-mig family and apply
+terraform apply -var='gpu_families_enabled=["cpu","t4","l4","h100-mig"]' -var-file=terraform.tfvars
+
+# 2. On the login node, submit to the MIG partition (1 slice)
+bash /tmp/login-ssm.sh
+cat > /tmp/mig-smoke.sh <<'EOF'
+#!/bin/bash
+#SBATCH --job-name=mig-smoke
+#SBATCH --partition=gpu-h100-mig
+#SBATCH --time=00:10:00
+#SBATCH --gres=gpu:1g.10gb:1
+#SBATCH --output=/fsx/work/%u/%j/out.log
+mkdir -p /fsx/work/$USER/$SLURM_JOB_ID
+nvidia-smi -L     # should show one MIG device
+EOF
+sbatch /tmp/mig-smoke.sh
+```
+
+The compute node auto-enables MIG and creates 7×1g.10gb slices at boot. Submit up to 7 concurrent jobs to one p5.4xlarge — they share the GPU via MIG.
+**Pass**: the job lands on a single MIG slice; `nvidia-smi -L` inside the job shows one `MIG ... 1g.10gb` device. **Cost**: ~$4 (p5.4xlarge × ~15 min). See §7 Known gaps — validate the GRES profile name on real hardware.
+
+### Scenario 8 — Failure paths (free)
+
+- **Cancelled job**: `scancel <id>` mid-run. Verify scratch cleanup cron on head node removes the orphaned `/fsx/work/$USER/<id>` dir (run manually: `sudo /etc/cron.daily/titan-scratch-cleanup`).
+- **Bad partition**: `sbatch --partition=nonexistent /tmp/cpu-smoke.sh` — should fail at submit time with a clear error.
 - **Capacity exhausted**: queue 5 jobs while `gpu_max_nodes.t4 = 4`; the 5th stays in `PD` (Pending) with reason `Resources`.
 
 ---
@@ -204,9 +256,9 @@ This terminates any compute nodes still running and runs `terraform destroy`. **
 
 ## 6. Recommended cadence
 
-- **Session 1** (~$3): Deploy → Scenarios 1, 2, 3, 4, 7 → destroy. Validates everything except L4 and MIG.
+- **Session 1** (~$3): Deploy → Scenarios 1 (CPU), 2 (T4), 3 (queue), 4 (Snakemake), 6 (telemetry), 8 (failures) → destroy. Validates everything except L4 and MIG.
 - **Session 2** (~$2): Deploy → Scenarios 2 (T4), 5 (L4), 4 (Snakemake) → destroy. Validates multi-family.
-- **Session 3** (~$8, if H100 quota): Deploy with `h100-1x` enabled → Scenarios 2 + 6 → destroy.
+- **Session 3** (~$8, if H100 quota): Deploy with `h100-mig` enabled → Scenario 7 (MIG) → destroy.
 
 Total: **~$13** of $100 spent on three thorough sessions, leaving $87 for ad-hoc work or longer development.
 
@@ -214,10 +266,9 @@ Total: **~$13** of $100 spent on three thorough sessions, leaving $87 for ad-hoc
 
 ## 7. Known gaps
 
-1. **No native CPU partition** — Scenario 1 uses a T4 node. To add a real CPU partition, extend `gpu_family_spec` with a `cpu` family and special-case it in `compute-fleet/main.tf` (use AL2023 AMI, not DLAMI).
-2. **MIG not Slurm-integrated** — Scenario 6 is manual.
-3. **No GPU/queue telemetry** — Slurm exporter, DCGM exporter, and Grafana are not deployed. Use `sinfo`, `squeue`, `nvidia-smi` directly via SSM.
-4. **No web UI** — by design. The `jobui/` directory is reference code for a future Fargate deployment.
+1. **MIG profile naming is experimental** — the `h100-mig` family enables MIG and creates 7×1g.10gb slices at boot, and Slurm is told `gpu:1g.10gb:7`. This needs validation on real H100 hardware to confirm the GRES type Slurm's NVML auto-detect reports matches `1g.10gb`. If it mismatches, adjust the type in `modules/head-node/main.tf` (`slurm_nodes` local).
+2. **No bundled Grafana** — Prometheus is deployed on the head node but there's no Grafana. Point your own Grafana (Cloud free tier or local) at the SSM-forwarded `:9090` and import dashboard IDs 4323 (Slurm) + 12239 (DCGM).
+3. **No web UI** — by design. The `jobui/` directory is reference code for a future Fargate deployment.
 
 ---
 

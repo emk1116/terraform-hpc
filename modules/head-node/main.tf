@@ -79,24 +79,38 @@ locals {
     )
   ])
 
+  # Per-family GRES type:
+  #   - CPU families (gpus_per_node = 0) → no Gres= line
+  #   - MIG family (h100-mig) → Gres=gpu:1g.10gb:7 (matches the MIG profile NVML reports)
+  #   - All other GPU families → Gres=gpu:<family>:<n>
   slurm_nodes = join("\n", [
     for family, spec in var.gpu_family_spec :
-    format(
+    spec.gpus_per_node == 0 ? format(
+      "NodeName=%s-[1-%d] CPUs=%d RealMemory=%d State=CLOUD",
+      family,
+      lookup(var.gpu_max_nodes, family, 2),
+      spec.cpus_per_node,
+      spec.memory_mb,
+      ) : format(
       "NodeName=%s-[1-%d] CPUs=%d RealMemory=%d Gres=gpu:%s:%d State=CLOUD",
       family,
       lookup(var.gpu_max_nodes, family, 2),
       spec.cpus_per_node,
       spec.memory_mb,
-      family,
-      spec.gpus_per_node
+      family == "h100-mig" ? "1g.10gb" : family,
+      spec.gpus_per_node,
     )
   ])
 
-  # Build AccountingStorageTRES from the actual GPU family names so they match
-  # the NodeName Gres= definitions (e.g. "gpu:h100-1x", not "gpu:h100").
+  # AccountingStorageTRES from the actual GRES type names (skip CPU families)
+  gpu_gres_types = [
+    for family, spec in var.gpu_family_spec :
+    (family == "h100-mig" ? "1g.10gb" : family)
+    if spec.gpus_per_node > 0
+  ]
   gres_tres = join(",", concat(
     ["gres/gpu"],
-    [for family, _ in var.gpu_family_spec : "gres/gpu:${family}"]
+    [for t in local.gpu_gres_types : "gres/gpu:${t}"]
   ))
 
   slurm_conf = templatefile("${path.module}/templates/slurm.conf.tpl", {

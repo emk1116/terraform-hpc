@@ -11,10 +11,26 @@
 locals {
   name_prefix = "${var.team_name}-${var.env}"
 
-  # Centralized map of GPU family → EC2 instance config.
+  # Centralized map of compute family → EC2 instance config.
   # Used by compute-fleet to build launch templates and by head-node/slurm to
   # generate partition/node definitions. Change here once, propagates everywhere.
+  #
+  # Families with gpus_per_node = 0 are CPU partitions (use AL2023 AMI).
+  # Families starting with "h100-mig" auto-enable MIG and expose 1g.10gb slices.
   gpu_family_spec = {
+    cpu = {
+      instance_type    = "c5.large"
+      gpus_per_node    = 0
+      gpu_memory_gb    = 0
+      cpus_per_node    = 2
+      memory_mb        = 3500
+      ebs_size_gb      = 30
+      partition        = "cpu"
+      hourly_cost_usd  = 0.085
+      resume_timeout_s = 300
+      suspend_time_s   = 300
+      uses_nvme_local  = false
+    }
     t4 = {
       instance_type    = "g4dn.xlarge"
       gpus_per_node    = 1
@@ -91,6 +107,21 @@ locals {
       hourly_cost_usd  = 55.04
       resume_timeout_s = 1800
       suspend_time_s   = 900
+      uses_nvme_local  = true
+    }
+    # MIG-partitioned H100: one p5.4xlarge sliced into 7 × 1g.10gb MIG GIs.
+    # Slurm sees 7 GPUs/node; users submit with --gres=gpu:1g.10gb:1.
+    h100-mig = {
+      instance_type    = "p5.4xlarge"
+      gpus_per_node    = 7
+      gpu_memory_gb    = 10
+      cpus_per_node    = 16
+      memory_mb        = 245000
+      ebs_size_gb      = 200
+      partition        = "gpu-h100-mig"
+      hourly_cost_usd  = 6.88
+      resume_timeout_s = 1500
+      suspend_time_s   = 600
       uses_nvme_local  = true
     }
   }

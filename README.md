@@ -99,7 +99,11 @@ no fallback path inside the HPC stack that requires a UI; everything is
 - **Aurora Serverless v2** — holds `slurm_acct_db` (slurmdbd accounting). When the future Fargate UI lands it also gets a `jobui` database; that's not in scope for this repo.
 - **Valkey Serverless** — provisioned in the VPC for the future UI. Not used by the HPC cluster itself.
 - **FSx Lustre SCRATCH_2** — `/fsx/models/<m>/` weights, `/fsx/work/<u>/<job>/` scratch, `/fsx/shared/` for workflows.
-- **GPU compute fleet** — 6 launch templates (one per family), DLAMI base, autoscales 0→N via Slurm Resume/SuspendProgram with per-partition timing.
+- **Compute fleet** — one launch template per family, autoscaled 0→N via Slurm Resume/SuspendProgram with per-partition timing:
+  - **GPU families** (t4/a10g/l4/a100/h100-1x/h100-8x) — DLAMI base, NVIDIA toolkit preinstalled
+  - **`cpu` family** — c5.large on plain AL2023, no GRES; submit with `--partition=cpu`
+  - **`h100-mig` family** — one p5.4xlarge auto-partitioned into 7×1g.10gb MIG slices at boot; submit with `--partition=gpu-h100-mig --gres=gpu:1g.10gb:1`
+- **Telemetry** — Prometheus + `prometheus-slurm-exporter` on the head node; NVIDIA **DCGM exporter** (`:9400`) on every GPU compute node, auto-discovered by Prometheus via EC2 tags. View at `localhost:9090` via `terraform output prometheus_port_forward_command`.
 - **S3** — data bucket: per-user prefixes for inputs/results, hosts the slurm.conf + slurm-client tarball, plus the completed-job log archives written by job epilogs.
 - **ECR** — per-team repositories for model images.
 
@@ -214,15 +218,11 @@ the UI is up. (Variable doesn't exist yet; see Roadmap.)
 
 | Item | State | Notes |
 |---|---|---|
-| Remove jobui Docker stack from `head-user-data.sh.tpl` | **Code change pending** | Today the head node user_data still builds and runs the jobui Docker compose stack (~200 lines). Per the new design, HPC is pure HPC — those steps should be deleted. The `jobui/` directory stays in the repo as reference for the future Fargate deployment. |
-| Add Slurm client install to login-node user_data | **Code change pending** | Current `login-node/user-data.sh.tpl` only mounts FSx and adds `/etc/hosts`. It needs to install munge, fetch `slurm-client-gpu.tar.gz` from S3, and place `slurm.conf` — same pattern `workflow-node/main.tf` already implements. |
-| Move ALB module out of root `main.tf` | **Code change pending** | With no UI in the HPC stack, the ALB module shouldn't be conditionally instantiated here. It'll move to whatever repo owns the Fargate jobui. |
-| `enable_valkey` toggle | **Not yet added** | If the team is HPC-only and won't deploy the future UI, Valkey is dead weight at ~$1.70/day. Add a boolean to skip it. |
-| Drop `cors_allowed_origins`, `enable_alb`, `head_node_http_cidrs` from `variables.tf` | **Cleanup pending** | These are vestigial from the UI-on-head-node and UI-on-Fargate iterations. None applies to a pure-HPC stack. |
-| Future: Fargate jobui module | **Out of scope** | Lives in a separate repo / future phase. Talks to this HPC cluster over a yet-to-be-designed contract. |
-| Slurm MIG GRES integration | Not wired | H100/A100 MIG slices can be configured manually on the compute node (see [TEST_PLAN.md](TEST_PLAN.md) §Scenario 6). |
-| CPU compute partition | Not wired | All test jobs currently run on T4/L4 nodes with `--gres=gpu:t4:0` as a workaround. |
-| GPU / queue telemetry | Not deployed | No Prometheus/DCGM/Slurm exporter yet. Use `sinfo`, `squeue`, `nvidia-smi` over SSM. |
+| CPU compute partition | **Done** | `cpu` family (c5.large, AL2023 AMI, no GRES) in `gpu_family_spec`. Submit with `--partition=cpu`. Enabled by default. |
+| Slurm-integrated MIG | **Done (experimental)** | `h100-mig` family slices one p5.4xlarge into 7×1g.10gb MIG GIs at boot; Slurm sees `gpu:1g.10gb:7`. Submit with `--partition=gpu-h100-mig --gres=gpu:1g.10gb:1`. Needs real H100 hardware to fully validate the NVML profile naming. |
+| GPU / queue telemetry | **Done** | Prometheus + slurm-exporter on the head node; DCGM exporter (`:9400`) on every GPU compute node, auto-discovered via EC2 tags. View with `terraform output prometheus_port_forward_command`. No Grafana yet — point your own at `localhost:9090`. |
+| Grafana dashboards | Not deployed | Prometheus is up but there's no bundled Grafana. Use Grafana Cloud free tier or a local Grafana pointed at the SSM-forwarded `:9090`; import dashboard IDs 4323 (Slurm) and 12239 (DCGM). |
+| Future: Fargate jobui module | **Out of scope** | Lives in a separate repo / future phase. Talks to this HPC cluster by submitting through the login node. |
 
 ## Repo layout
 
@@ -238,13 +238,11 @@ the UI is up. (Variable doesn't exist yet; see Roadmap.)
 │   ├── s3/                          # data bucket + lifecycle + CORS
 │   ├── ecr/                         # per-team model image repos
 │   ├── aurora/                      # Serverless v2 MySQL (slurm_acct_db)
-│   ├── valkey/                      # ElastiCache Serverless (for future UI)
 │   ├── fsx/                         # Lustre SCRATCH_2
-│   ├── alb/                         # vestigial — to be moved out with the UI work
-│   ├── head-node/                   # slurmctld + slurmdbd (control plane)
-│   ├── login-node/                  # SSH/SSM entry + Slurm client + FSx
+│   ├── head-node/                   # slurmctld + slurmdbd + Prometheus/slurm-exporter
+│   ├── login-node/                  # SSH/SSM entry + Slurm client + Snakemake + FSx
 │   ├── workflow-node/               # Snakemake runner (required)
-│   └── compute-fleet/               # GPU launch templates per family
+│   └── compute-fleet/               # launch templates per family (GPU + CPU + MIG)
 ├── jobui/                           # FUTURE — Fargate-deployed UI (not in HPC stack)
 │   ├── backend/                     # FastAPI + SQLAlchemy + Alembic
 │   └── frontend/                    # React + Vite SPA

@@ -259,6 +259,14 @@ resource "aws_security_group" "compute" {
   }
 
   ingress {
+    description     = "DCGM exporter scrape from head node (Prometheus)"
+    from_port       = 9400
+    to_port         = 9400
+    protocol        = "tcp"
+    security_groups = [aws_security_group.head_node.id]
+  }
+
+  ingress {
     description = "MPI / ephemeral between compute nodes (same SG)"
     from_port   = 0
     to_port     = 65535

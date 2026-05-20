@@ -245,4 +245,98 @@ done
 CLEANEOF
 chmod +x /etc/cron.daily/titan-scratch-cleanup
 
+# ----------------------------------------------------------------------------
+# 12. Telemetry — Prometheus + Slurm exporter on the head node.
+#     DCGM exporter runs on each compute node (port 9400); Prometheus
+#     discovers them dynamically by querying EC2 tags.
+# ----------------------------------------------------------------------------
+PROM_VERSION=2.54.1
+SLURM_EXPORTER_VERSION=0.20
+
+# Slurm exporter — Go binary, talks to slurmctld via the Slurm CLI
+useradd -r -s /sbin/nologin slurm-exporter || true
+mkdir -p /opt/slurm-exporter
+curl -sSfL "https://github.com/vpenso/prometheus-slurm-exporter/releases/download/$SLURM_EXPORTER_VERSION/prometheus-slurm-exporter" \
+    -o /opt/slurm-exporter/slurm-exporter 2>/dev/null || \
+    echo "WARN: slurm-exporter download failed; telemetry partial"
+chmod +x /opt/slurm-exporter/slurm-exporter 2>/dev/null || true
+
+cat > /etc/systemd/system/slurm-exporter.service <<EOF
+[Unit]
+Description=Prometheus Slurm exporter
+After=slurmctld.service
+Requires=slurmctld.service
+
+[Service]
+Type=simple
+User=slurm
+Environment=PATH=/opt/slurm/bin:/opt/slurm/sbin:/usr/bin:/bin
+ExecStart=/opt/slurm-exporter/slurm-exporter -listen-address=:8080
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Prometheus — scrapes slurm-exporter on :8080 and DCGM on compute :9400
+useradd -r -s /sbin/nologin prometheus || true
+mkdir -p /opt/prometheus /var/lib/prometheus
+chown prometheus:prometheus /var/lib/prometheus
+
+curl -sSfL "https://github.com/prometheus/prometheus/releases/download/v$PROM_VERSION/prometheus-$PROM_VERSION.linux-amd64.tar.gz" \
+    -o /tmp/prometheus.tar.gz
+tar xzf /tmp/prometheus.tar.gz -C /opt/prometheus --strip-components=1
+
+cat > /opt/prometheus/prometheus.yml <<EOF
+global:
+  scrape_interval: 30s
+
+scrape_configs:
+  - job_name: slurm
+    static_configs:
+      - targets: ['localhost:8080']
+
+  - job_name: dcgm
+    ec2_sd_configs:
+      - region: $AWS_REGION
+        port: 9400
+        filters:
+          - name: tag:Team
+            values: ['$TEAM_NAME']
+          - name: tag:Role
+            values: ['compute']
+          - name: instance-state-name
+            values: ['running']
+    relabel_configs:
+      - source_labels: [__meta_ec2_tag_GpuFamily]
+        target_label: gpu_family
+      - source_labels: [__meta_ec2_tag_Name]
+        target_label: instance_name
+EOF
+chown -R prometheus:prometheus /opt/prometheus
+
+cat > /etc/systemd/system/prometheus.service <<EOF
+[Unit]
+Description=Prometheus
+After=network.target
+
+[Service]
+Type=simple
+User=prometheus
+ExecStart=/opt/prometheus/prometheus \\
+    --config.file=/opt/prometheus/prometheus.yml \\
+    --storage.tsdb.path=/var/lib/prometheus \\
+    --storage.tsdb.retention.time=7d \\
+    --web.listen-address=127.0.0.1:9090
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now slurm-exporter prometheus
+
 echo "[$(date)] titan-hpc head node bootstrap complete"

@@ -61,29 +61,31 @@ variable "enable_login_node" {
 # ============================================================================
 
 variable "gpu_families_enabled" {
-  description = "Which GPU families to provision launch templates and partitions for. Omit H100 here if you don't have quota yet."
+  description = "Which compute families to provision launch templates and partitions for. 'cpu' is a CPU-only c5.large partition. Omit H100 families here if you don't have quota."
   type        = list(string)
-  default     = ["t4", "a10g", "l4", "a100", "h100-1x"]
+  default     = ["cpu", "t4", "a10g", "l4", "a100", "h100-1x"]
 
   validation {
     condition = alltrue([
       for f in var.gpu_families_enabled :
-      contains(["t4", "a10g", "l4", "a100", "h100-1x", "h100-8x"], f)
+      contains(["cpu", "t4", "a10g", "l4", "a100", "h100-1x", "h100-8x", "h100-mig"], f)
     ])
-    error_message = "Valid gpu families: t4, a10g, l4, a100, h100-1x, h100-8x."
+    error_message = "Valid families: cpu, t4, a10g, l4, a100, h100-1x, h100-8x, h100-mig."
   }
 }
 
 variable "gpu_max_nodes" {
-  description = "Max concurrent compute nodes per GPU family. Must be ≤ your AWS quota."
+  description = "Max concurrent compute nodes per family. Must be ≤ your AWS quota."
   type        = map(number)
   default = {
-    t4      = 10
-    a10g    = 20
-    l4      = 15
-    a100    = 2
-    h100-1x = 4
-    h100-8x = 1
+    cpu      = 4
+    t4       = 10
+    a10g     = 20
+    l4       = 15
+    a100     = 2
+    h100-1x  = 4
+    h100-8x  = 1
+    h100-mig = 1
   }
 }
 

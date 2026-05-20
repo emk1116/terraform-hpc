@@ -23,6 +23,11 @@ output "head_node_ssm_command" {
   value       = "aws ssm start-session --region ${var.aws_region} --target ${module.head_node.instance_id}"
 }
 
+output "prometheus_port_forward_command" {
+  description = "Admin SSM port-forward to view Prometheus at http://localhost:9090. Cluster + GPU metrics from slurm-exporter and DCGM exporters."
+  value       = "aws ssm start-session --region ${var.aws_region} --target ${module.head_node.instance_id} --document-name AWS-StartPortForwardingSession --parameters portNumber=9090,localPortNumber=9090"
+}
+
 output "workflow_node_instance_id" {
   description = "Workflow node EC2 instance ID (Snakemake runner)."
   value       = module.workflow_node.instance_id
